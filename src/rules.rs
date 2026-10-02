@@ -1,6 +1,7 @@
 //! Where macOS and common tools keep data, and what happens if it goes away.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Safety {
     /// Apps rebuild it on their own.
     Safe,

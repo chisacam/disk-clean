@@ -8,9 +8,16 @@ cargo install --path .     # ~/.cargo/bin/disk-clean
 
 disk-clean                 # = scan. 읽기만 함
 disk-clean top ~ -d 2      # 큰 폴더·파일 순위 (정체불명 찾기)
-disk-clean clean           # 목록에서 골라 지우기 (확인 후)
+disk-clean clean           # 터미널에서 골라 지우기 (확인 후)
 disk-clean clean caches dev:.terraform --dry-run
+
+disk-clean plan caches/Homebrew npm   # 지울 계획만 만들어 저장 (1시간, 한 번)
+disk-clean apply 3fa2c19b04d1         # 그 계획에 적힌 경로만 다시 확인하고 지움
+disk-clean log                        # 지운 기록
 ```
+
+`scan`·`top`·`plan`·`apply`·`log` 는 `--json` 을 받는다. 크기는 바이트 정수, 오류도 JSON 이다.
+종료 코드: 0 성공 · 1 오류 · 2 일부만 지움 · 3 거부(안전장치가 막음).
 
 ## 분류
 
@@ -39,6 +46,45 @@ LaunchServices 에 그 bundle id 로 등록된 앱이 없고, Spotlight 에서�
 - 심볼릭 링크는 따라가지 않고, 다른 볼륨으로 넘어가지 않는다. `com.apple.*` 캐시는 건드리지 않는다.
 - 개발 산출물은 지우기 직전에 표식을 다시 확인한다.
 - 지운 뒤 늘어난 공간은 추정이 아니라 `statfs` 로 잰 값을 보여 준다.
+
+## 에이전트가 쓸 때
+
+셸을 가진 에이전트는 이 도구를 거치지 않고도 `rm` 할 수 있다. 그래서 승인 관문은 하네스에 두고,
+도구는 사람이 승인할 대상을 분명하게 만든다.
+
+- **plan / apply.** 에이전트는 `plan` 으로 계획을 만들어 보여 주고, 사람이 그 계획 ID 를 승인하면 `apply` 한다.
+  `clean` 은 터미널이 아니면 지우지 않는다.
+- **apply 는 계획 파일을 믿지 않는다.** 계획 파일은 누구나 고칠 수 있으므로 apply 는
+  ① ID 가 내용의 해시와 같은지, ② 지금 다시 잰 scan 에서도 같은 분류로 지울 수 있는 경로인지,
+  ③ 같은 파일·폴더(device·inode)이고 계획보다 크게 커지지 않았는지(10% 와 64 MiB 중 큰 쪽)를 경로마다 본다.
+  계획은 1시간 뒤 만료되고, 성공하든 거부되든 한 번 쓰면 끝난다.
+- **감사 로그.** 지울 때마다 `~/.local/state/disk-clean/audit.jsonl` 에 한 줄을 남긴다
+  (시각, 누가 — `claude-code`·`pi:<세션>`·`terminal`, 겹쳐 띄웠으면 표식 전부, 계획, 지운 경로와 크기, 거부·실패, 전후 남은 공간).
+  `~/Library/Logs` 에 두지 않는 것은 `logs` 규칙이 그 폴더를 비우기 때문이다.
+
+하네스 연결 (원본은 `integrations/`, 심볼릭 링크로 설치):
+
+```sh
+# 사용법 skill — Claude Code 와 pi
+ln -s "$PWD/integrations/skill/disk-clean" ~/.claude/skills/disk-clean
+ln -s "$PWD/integrations/skill/disk-clean" ~/.pi/agent/skills/disk-clean
+# pi: apply 를 가로채 계획 내용을 보여 주고 승인을 받는 확장. clean 은 막는다
+ln -s "$PWD/integrations/pi/disk-clean-gate" ~/.pi/agent/extensions/disk-clean-gate
+node --test integrations/pi/gate.test.ts
+```
+
+Claude Code 는 `~/.claude/settings.json` 의 권한 규칙으로 막는다:
+
+```json
+"permissions": {
+  "allow": ["Bash(disk-clean scan:*)", "Bash(disk-clean top:*)", "Bash(disk-clean plan:*)", "Bash(disk-clean log:*)"],
+  "ask":   ["Bash(disk-clean apply:*)"],
+  "deny":  ["Bash(disk-clean clean:*)"]
+}
+```
+
+Claude Code 의 규칙은 명령 앞부분으로 맞추므로 `~/.cargo/bin/disk-clean apply …` 처럼 전체 경로로 부르면
+`ask` 에 걸리지 않는다(skill 이 이름으로만 부르게 한다). pi 확장은 전체 경로 형태도 잡는다.
 
 ## 측정
 

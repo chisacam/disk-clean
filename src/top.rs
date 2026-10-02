@@ -7,9 +7,19 @@ use console::style;
 use std::path::Path;
 use std::time::Instant;
 
-pub fn run(path: &Path, keep: usize, depth: usize, home: &Path) {
+pub fn run(path: &Path, keep: usize, depth: usize, json: bool, home: &Path) {
     let start = Instant::now();
     let root = tree(path, depth.max(1), keep, &Seen::default());
+    if json {
+        let out = serde_json::json!({
+            "schema": "disk-clean/top/v1",
+            "path": path,
+            "tree": root,
+            "elapsed_ms": start.elapsed().as_millis() as u64,
+        });
+        println!("{out}");
+        return;
+    }
     println!(
         "{}  {} · 파일 {}개 · {:.1}초",
         style(tilde(path, home)).bold(),
@@ -40,7 +50,7 @@ fn print(node: &Node, level: usize, total: u64, min: u64) {
         println!("{indent}{} {:>5.1}%  {name}{hint}", rpad(&size(child.usage.bytes), 9), pct);
         print(child, level + 1, total, min);
     }
-    let (n, bytes) = node.rest;
+    let crate::walk::Rest { count: n, bytes } = node.rest;
     if n > 0 && (level == 1 || bytes >= min) {
         println!("{indent}{}         {}", rpad(&size(bytes), 9), style(format!("그 외 {n}개")).dim());
     }

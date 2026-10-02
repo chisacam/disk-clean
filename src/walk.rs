@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize)]
 pub struct Usage {
     /// Bytes allocated on disk (`st_blocks`), so sparse files are not inflated.
     pub bytes: u64,
@@ -161,14 +161,22 @@ fn walk(dir: &Path, dev: u64, seen: &Seen, totals: &Totals) {
     subdirs.par_iter().for_each(|d| walk(d, dev, seen, totals));
 }
 
+#[derive(serde::Serialize)]
 pub struct Node {
     pub name: String,
     pub is_dir: bool,
+    #[serde(flatten)]
     pub usage: Usage,
     /// Largest children first, cut at `keep`.
     pub children: Vec<Node>,
-    /// Children cut past `keep`: how many, and their bytes.
-    pub rest: (usize, u64),
+    /// Children cut past `keep`.
+    pub rest: Rest,
+}
+
+#[derive(Clone, Copy, Default, serde::Serialize)]
+pub struct Rest {
+    pub count: usize,
+    pub bytes: u64,
 }
 
 /// Measures `path` once, keeping per-entry sizes for the first `depth` levels.
@@ -181,7 +189,7 @@ pub fn tree(path: &Path, depth: usize, keep: usize, seen: &Seen) -> Node {
         is_dir,
         usage,
         children: Vec::new(),
-        rest: (0, 0),
+        rest: Rest::default(),
     };
     let md = match lstat(path) {
         Ok(md) => md,
@@ -219,7 +227,7 @@ pub fn tree(path: &Path, depth: usize, keep: usize, seen: &Seen) -> Node {
                     is_dir: false,
                     usage: file_usage(m, seen),
                     children: Vec::new(),
-                    rest: (0, 0),
+                    rest: Rest::default(),
                 }
             }
         })
@@ -230,9 +238,9 @@ pub fn tree(path: &Path, depth: usize, keep: usize, seen: &Seen) -> Node {
     children.sort_by_key(|c| std::cmp::Reverse(c.usage.bytes));
     let rest = if children.len() > keep {
         let cut = children.split_off(keep);
-        (cut.len(), cut.iter().map(|c| c.usage.bytes).sum())
+        Rest { count: cut.len(), bytes: cut.iter().map(|c| c.usage.bytes).sum() }
     } else {
-        (0, 0)
+        Rest::default()
     };
     Node { name, is_dir: true, usage, children, rest }
 }

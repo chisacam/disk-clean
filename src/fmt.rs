@@ -35,15 +35,37 @@ pub fn tilde(path: &Path, home: &Path) -> String {
     }
 }
 
-/// `YYYY-MM-DD` in local time.
-pub fn date(t: SystemTime) -> String {
-    let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) as libc::time_t;
+fn local(secs: u64) -> Option<libc::tm> {
+    let secs = secs as libc::time_t;
     // SAFETY: localtime_r only writes into the tm we own.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    if unsafe { libc::localtime_r(&secs, &mut tm) }.is_null() {
-        return "?".into();
-    }
-    format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday)
+    (!unsafe { libc::localtime_r(&secs, &mut tm) }.is_null()).then_some(tm)
+}
+
+/// `YYYY-MM-DD` in local time.
+pub fn date(t: SystemTime) -> String {
+    let secs = t.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    local(secs).map_or_else(
+        || "?".into(),
+        |tm| format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday),
+    )
+}
+
+/// `YYYY-MM-DD HH:MM` in local time, from Unix seconds.
+pub fn datetime(secs: u64) -> String {
+    local(secs).map_or_else(
+        || "?".into(),
+        |tm| {
+            format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}",
+                tm.tm_year + 1900,
+                tm.tm_mon + 1,
+                tm.tm_mday,
+                tm.tm_hour,
+                tm.tm_min
+            )
+        },
+    )
 }
 
 /// Shortens from the middle so both the start and the leaf of a path stay visible.

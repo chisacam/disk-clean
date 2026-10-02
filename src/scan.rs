@@ -5,6 +5,8 @@ use crate::fmt::{date, size, tilde};
 use crate::orphans::{self, Orphan};
 use crate::rules::{self, Mode, RULES, Rule, Safety};
 use crate::walk::{Seen, Usage, list, lstat, measure};
+use crate::Refused;
+use anyhow::Result;
 use rayon::prelude::*;
 use std::cmp::Reverse;
 use std::collections::HashSet;
@@ -18,7 +20,7 @@ const REPORT_MIN: u64 = 1 << 30;
 /// Project artifacts at least this big are listed one by one.
 const ARTIFACT_MIN: u64 = 1 << 30;
 
-#[derive(Default)]
+#[derive(Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Opts {
     pub dev_roots: Vec<PathBuf>,
     pub no_dev: bool,
@@ -93,6 +95,35 @@ fn leftover_item(home: &Path, o: &Orphan) -> Item {
         notes,
         recheck: Recheck::Leftover(o.container.clone()),
     }
+}
+
+fn hit(id: &str, arg: &str) -> bool {
+    id == arg || id.strip_prefix(arg).is_some_and(|r| r.starts_with('/') || r.starts_with(':'))
+}
+
+/// The cleanable items named by `ids`; an id also names everything below it
+/// (`caches` takes `caches/Homebrew`, `dev:.terraform` takes `dev:.terraform:eks`).
+pub fn select<'a>(items: &'a [Item], ids: &[String]) -> Result<Vec<&'a Item>> {
+    let live = |i: &&Item| i.usage.bytes > 0 && !i.paths.is_empty();
+    let mut out: Vec<&Item> = Vec::new();
+    for arg in ids {
+        let found: Vec<&Item> = items.iter().filter(live).filter(|i| i.cleanable && hit(&i.id, arg)).collect();
+        if found.is_empty() {
+            if items.iter().any(|i| !i.cleanable && hit(&i.id, arg)) {
+                return Err(Refused(format!("`{arg}` 는 직접 판단할 항목이라 지우지 않습니다. 앱 안에서 정리하세요.")).into());
+            }
+            return Err(Refused(format!(
+                "`{arg}` 에 해당하는 항목이 없습니다(비어 있거나 ID 가 다름). `disk-clean scan` 으로 확인하세요."
+            ))
+            .into());
+        }
+        for item in found {
+            if !out.iter().any(|o| std::ptr::eq(*o, item)) {
+                out.push(item);
+            }
+        }
+    }
+    Ok(out)
 }
 
 struct Unit {
@@ -362,6 +393,16 @@ fn notes(f: &Found) -> Vec<String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn ids_match_whole_segments() {
+        assert!(hit("caches", "caches"));
+        assert!(hit("caches/Homebrew", "caches"));
+        assert!(hit("dev:.terraform:eks", "dev:.terraform"));
+        assert!(!hit("caches-old", "caches"));
+        assert!(!hit("dev:.terraformx", "dev:.terraform"));
+    }
+
 
     #[test]
     fn expand_matches_star_and_skips_symlinks() {

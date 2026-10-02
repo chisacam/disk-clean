@@ -124,6 +124,41 @@ pub fn short_note(unreadable: u64) -> String {
     format!("⚠ 읽지 못한 곳 {unreadable}곳 — 실제 크기는 이보다 큼")
 }
 
+pub fn scan_json(items: &[Item], sys: &System, elapsed: Duration) -> serde_json::Value {
+    let mut sorted: Vec<&Item> = items.iter().collect();
+    sorted.sort_by_key(|i| (i.safety, Reverse(i.usage.bytes)));
+    serde_json::json!({
+        "schema": "disk-clean/scan/v1",
+        "disk": sys.disk.as_ref().map(|d| serde_json::json!({
+            "total": d.total,
+            "free": d.free,
+            "used": d.total.saturating_sub(d.free),
+            "basis": "apfs-container",
+        })),
+        "full_disk_access": sys.fda,
+        "items": sorted.iter().map(|i| serde_json::json!({
+            "id": i.id,
+            "group": i.group,
+            "about": i.about,
+            "safety": i.safety,
+            "cleanable": i.cleanable,
+            "bytes": i.usage.bytes,
+            "files": i.usage.files,
+            "unreadable": i.usage.unreadable,
+            "shown": i.shown,
+            "notes": i.notes,
+            "paths": i.paths,
+        })).collect::<Vec<_>>(),
+        "system": {
+            "local_snapshots": sys.snapshots,
+            "vm_bytes": sys.vm.bytes,
+            "temp": sys.temp.as_ref().map(|(p, u)| serde_json::json!({ "path": p, "bytes": u.bytes })),
+        },
+        "unreadable": items.iter().map(|i| i.usage.unreadable).sum::<u64>(),
+        "elapsed_ms": elapsed.as_millis() as u64,
+    })
+}
+
 /// Items grouped by heading, biggest group first.
 fn groups<'a>(items: &[&'a Item]) -> Vec<Vec<&'a Item>> {
     let mut out: Vec<Vec<&Item>> = Vec::new();
