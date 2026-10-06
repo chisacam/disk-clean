@@ -127,7 +127,10 @@ pub struct Found {
 /// (`~/.vscode/extensions`, `~/.local/pipx`, `~/.nvm`), and their
 /// `node_modules` or virtualenvs are part of the installed tool.
 pub fn default_roots(home: &Path) -> Vec<PathBuf> {
-    const SKIP: &[&str] = &["Library", "Applications", "Movies", "Music", "Pictures", "Public"];
+    const SKIP: &[&str] = &[
+        "Library", "Applications", "Movies", "Music", "Pictures", "Public", // macOS
+        "Videos", "Templates", "snap", // Linux
+    ];
     let Ok(entries) = list(home) else { return Vec::new() };
     entries
         .into_iter()

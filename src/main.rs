@@ -1,3 +1,6 @@
+#[cfg(not(unix))]
+compile_error!("disk-clean supports macOS and Linux only.");
+
 mod clean;
 mod dev;
 mod fmt;
@@ -19,8 +22,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-/// macOS 의 '시스템 데이터'·'문서' 용량이 어디서 왔는지 보여 주고,
-/// 다시 만들 수 있는 것만 골라 지웁니다.
+/// 디스크를 무엇이 차지하는지(macOS 의 '시스템 데이터'·'문서' 포함) 보여 주고,
+/// 다시 만들 수 있는 것만 골라 지웁니다. macOS·Linux 용.
 ///
 /// 종료 코드: 0 성공 · 1 오류 · 2 일부 실패 · 3 거부(안전장치가 막음)
 #[derive(Parser)]

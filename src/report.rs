@@ -31,7 +31,7 @@ pub fn print_scan(items: &[Item], sys: &System, home: &Path, all: bool, elapsed:
             size(d.total),
             size(d.total.saturating_sub(d.free)),
             size(d.free),
-            style("APFS 컨테이너 기준 — macOS·Preboot·Recovery 볼륨 포함").dim()
+            style(sys.disk_basis).dim()
         );
     }
     if sys.fda == Some(false) {
@@ -87,19 +87,24 @@ pub fn print_scan(items: &[Item], sys: &System, home: &Path, all: bool, elapsed:
 
     println!();
     println!("{}", style("■ 시스템 — 정보만, 지우지 않음").bold());
-    let snapshots = match sys.snapshots {
-        Some(n) => format!("{n}개"),
-        None => "확인 못 함".into(),
-    };
-    println!("  {}  {}  {}", pad("로컬 스냅샷", 14), rpad(&snapshots, SIZE_WIDTH), style("공간이 모자라면 macOS 가 알아서 지움").dim());
-    println!("  {}  {}  {}", pad("/private/var/vm", 14), rpad(&size(sys.vm.bytes), SIZE_WIDTH), style("절전 이미지·스왑 파일 — 정상").dim());
-    if let Some((path, usage)) = &sys.temp {
-        println!(
-            "  {}  {}  {}",
-            pad("임시 폴더", 14),
-            rpad(&size(usage.bytes), SIZE_WIDTH),
-            style(format!("{} — 재부팅 때 macOS 가 정리", tilde(path, home))).dim()
-        );
+    for e in &sys.entries {
+        let value = match (e.count, e.usage) {
+            (Some(n), _) => format!("{n}개"),
+            (None, Some(u)) if u.bytes == 0 && u.unreadable > 0 => "읽지 못함".into(),
+            (None, Some(u)) => size(u.bytes),
+            (None, None) => "확인 못 함".into(),
+        };
+        let mut note = String::new();
+        if let Some(p) = &e.path
+            && p.to_str() != Some(e.label)
+        {
+            note = format!("{} — ", tilde(p, home));
+        }
+        note += e.note;
+        if e.usage.is_some_and(|u| u.unreadable > 0 && u.bytes > 0) {
+            note += " (일부를 읽지 못해 실제는 더 큼)";
+        }
+        println!("  {}  {}  {}", pad(e.label, 14), rpad(&value, SIZE_WIDTH), style(note).dim());
     }
 
     println!();
@@ -133,7 +138,7 @@ pub fn scan_json(items: &[Item], sys: &System, elapsed: Duration) -> serde_json:
             "total": d.total,
             "free": d.free,
             "used": d.total.saturating_sub(d.free),
-            "basis": "apfs-container",
+            "basis": sys.disk_basis,
         })),
         "full_disk_access": sys.fda,
         "items": sorted.iter().map(|i| serde_json::json!({
@@ -149,11 +154,14 @@ pub fn scan_json(items: &[Item], sys: &System, elapsed: Duration) -> serde_json:
             "notes": i.notes,
             "paths": i.paths,
         })).collect::<Vec<_>>(),
-        "system": {
-            "local_snapshots": sys.snapshots,
-            "vm_bytes": sys.vm.bytes,
-            "temp": sys.temp.as_ref().map(|(p, u)| serde_json::json!({ "path": p, "bytes": u.bytes })),
-        },
+        "system": sys.entries.iter().map(|e| serde_json::json!({
+            "label": e.label,
+            "path": e.path,
+            "bytes": e.usage.map(|u| u.bytes),
+            "unreadable": e.usage.map(|u| u.unreadable),
+            "count": e.count,
+            "note": e.note,
+        })).collect::<Vec<_>>(),
         "unreadable": items.iter().map(|i| i.usage.unreadable).sum::<u64>(),
         "elapsed_ms": elapsed.as_millis() as u64,
     })

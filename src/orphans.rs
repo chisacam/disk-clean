@@ -9,13 +9,11 @@
 use crate::walk::{Seen, Usage, list, lstat, measure, retry};
 use plist::Value;
 use rayon::prelude::*;
-use std::ffi::{OsStr, c_void};
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::ptr::null;
 use std::time::SystemTime;
 
 const METADATA: &str = ".com.apple.containermanagerd.metadata.plist";
@@ -105,56 +103,74 @@ fn spotlight(id: &str) -> bool {
     }
 }
 
-type CFTypeRef = *const c_void;
+#[cfg(target_os = "macos")]
+mod launch_services {
+    use std::ffi::{OsStr, c_void};
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
+    use std::ptr::null;
 
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFStringCreateWithBytes(alloc: CFTypeRef, bytes: *const u8, len: isize, encoding: u32, external: u8) -> CFTypeRef;
-    fn CFArrayGetCount(array: CFTypeRef) -> isize;
-    fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: isize) -> CFTypeRef;
-    fn CFURLGetFileSystemRepresentation(url: CFTypeRef, resolve: u8, buf: *mut u8, max: isize) -> u8;
-    fn CFRelease(cf: CFTypeRef);
-}
+    type CFTypeRef = *const c_void;
 
-#[link(name = "CoreServices", kind = "framework")]
-unsafe extern "C" {
-    fn LSCopyApplicationURLsForBundleIdentifier(id: CFTypeRef, err: *mut CFTypeRef) -> CFTypeRef;
-}
-
-const UTF8: u32 = 0x0800_0100;
-
-/// Apps LaunchServices has registered under this bundle id that are still on disk.
-fn registered_apps(id: &str) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    // SAFETY: every object created or copied here is released before returning,
-    // and the array is only indexed below its count.
-    unsafe {
-        let cf_id = CFStringCreateWithBytes(null(), id.as_ptr(), id.len() as isize, UTF8, 0);
-        if cf_id.is_null() {
-            return out;
-        }
-        let mut err: CFTypeRef = null();
-        let urls = LSCopyApplicationURLsForBundleIdentifier(cf_id, &mut err);
-        CFRelease(cf_id);
-        if !err.is_null() {
-            CFRelease(err);
-        }
-        if urls.is_null() {
-            return out;
-        }
-        for i in 0..CFArrayGetCount(urls) {
-            let mut buf = [0u8; 4096];
-            let url = CFArrayGetValueAtIndex(urls, i);
-            if CFURLGetFileSystemRepresentation(url, 1, buf.as_mut_ptr(), buf.len() as isize) != 0 {
-                let len = buf.iter().position(|&b| b == 0).unwrap_or(0);
-                out.push(PathBuf::from(OsStr::from_bytes(&buf[..len])));
-            }
-        }
-        CFRelease(urls);
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithBytes(alloc: CFTypeRef, bytes: *const u8, len: isize, encoding: u32, external: u8) -> CFTypeRef;
+        fn CFArrayGetCount(array: CFTypeRef) -> isize;
+        fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: isize) -> CFTypeRef;
+        fn CFURLGetFileSystemRepresentation(url: CFTypeRef, resolve: u8, buf: *mut u8, max: isize) -> u8;
+        fn CFRelease(cf: CFTypeRef);
     }
-    out.retain(|p| p.exists());
-    out
+
+    #[link(name = "CoreServices", kind = "framework")]
+    unsafe extern "C" {
+        fn LSCopyApplicationURLsForBundleIdentifier(id: CFTypeRef, err: *mut CFTypeRef) -> CFTypeRef;
+    }
+
+    const UTF8: u32 = 0x0800_0100;
+
+    /// Apps LaunchServices has registered under this bundle id that are still on disk.
+    pub fn registered_apps(id: &str) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        // SAFETY: every object created or copied here is released before returning,
+        // and the array is only indexed below its count.
+        unsafe {
+            let cf_id = CFStringCreateWithBytes(null(), id.as_ptr(), id.len() as isize, UTF8, 0);
+            if cf_id.is_null() {
+                return out;
+            }
+            let mut err: CFTypeRef = null();
+            let urls = LSCopyApplicationURLsForBundleIdentifier(cf_id, &mut err);
+            CFRelease(cf_id);
+            if !err.is_null() {
+                CFRelease(err);
+            }
+            if urls.is_null() {
+                return out;
+            }
+            for i in 0..CFArrayGetCount(urls) {
+                let mut buf = [0u8; 4096];
+                let url = CFArrayGetValueAtIndex(urls, i);
+                if CFURLGetFileSystemRepresentation(url, 1, buf.as_mut_ptr(), buf.len() as isize) != 0 {
+                    let len = buf.iter().position(|&b| b == 0).unwrap_or(0);
+                    out.push(PathBuf::from(OsStr::from_bytes(&buf[..len])));
+                }
+            }
+            CFRelease(urls);
+        }
+        out.retain(|p| p.exists());
+        out
+    }
 }
+
+/// LaunchServices is macOS's; elsewhere there is nothing to ask.
+#[cfg(not(target_os = "macos"))]
+mod launch_services {
+    pub fn registered_apps(_id: &str) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+}
+
+use launch_services::registered_apps;
 
 /// The current user's `/var/folders/xx/<id>` directory, resolved.
 pub fn temp_root() -> Option<PathBuf> {
@@ -170,6 +186,10 @@ fn darwin_dir(path: &Path, id: &str, temp: &Path) -> bool {
 }
 
 pub fn find(home: &Path, seen: &Seen) -> Vec<Orphan> {
+    // App containers and their metadata are macOS's.
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
     let root = home.join("Library/Containers");
     let Ok(entries) = list(&root) else { return Vec::new() };
     let temp = temp_root();
@@ -258,6 +278,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn launch_services_knows_finder() {
         // Control for the FFI: an app every Mac has.
         assert!(!registered_apps("com.apple.finder").is_empty());

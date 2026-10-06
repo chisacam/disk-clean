@@ -32,6 +32,17 @@ const PROTECTED: &[&str] = &[
     ".m2",
     ".npm",
     "go",
+    // Linux: XDG folders, Flatpak, Snap.
+    ".config",
+    ".local",
+    ".local/share",
+    ".local/state",
+    ".local/share/Trash",
+    ".local/share/Trash/files",
+    ".local/share/Trash/info",
+    ".var",
+    ".var/app",
+    "snap",
 ];
 
 /// Where anything may be deleted at all.

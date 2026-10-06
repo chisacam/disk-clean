@@ -279,6 +279,10 @@ mod tests {
 
     #[test]
     fn counts_unreadable_folders_instead_of_dropping_them() {
+        // Root reads a mode-000 folder anyway, so there is nothing to observe.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
         let t = tempfile::tempdir().unwrap();
         let locked = t.path().join("locked");
         fs::create_dir_all(locked.join("inside")).unwrap();

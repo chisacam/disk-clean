@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+      - name: End-to-end against a fake home
+        run: python3 tests/e2e.py target/release/disk-clean
+      - name: Scan the runner's real home (read only)
+        run: |
+          ./target/release/disk-clean scan --all
+          ./target/release/disk-clean top ~ -n 5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: pi gate
+        run: node --test integrations/pi/gate.test.ts

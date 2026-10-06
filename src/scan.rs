@@ -3,7 +3,7 @@
 use crate::dev::{self, Found, Kind};
 use crate::fmt::{date, size, tilde};
 use crate::orphans::{self, Orphan};
-use crate::rules::{self, Mode, RULES, Rule, Safety};
+use crate::rules::{self, Mode, Rule, Safety};
 use crate::walk::{Seen, Usage, list, lstat, measure};
 use crate::Refused;
 use anyhow::Result;
@@ -169,7 +169,7 @@ fn entries(dir: &Path) -> Vec<(PathBuf, String)> {
 fn units(home: &Path, rule: &Rule, taken: &[PathBuf]) -> (Vec<Unit>, usize) {
     let mut out = Vec::new();
     let mut excluded = 0;
-    let skip = |name: &str| rule.exclude.iter().any(|p| name.starts_with(p));
+    let skip = |name: &str| rule.exclude.prefixes.iter().any(|p| name.starts_with(p));
     let is_taken = |p: &Path| taken.iter().any(|t| p.starts_with(t));
     for pattern in rule.targets {
         for (target, star) in expand(home, pattern) {
@@ -209,7 +209,8 @@ fn units(home: &Path, rule: &Rule, taken: &[PathBuf]) -> (Vec<Unit>, usize) {
 }
 
 fn rule_items(home: &Path, seen: &Seen, taken: &[PathBuf]) -> Vec<Item> {
-    let expanded: Vec<_> = RULES.par_iter().map(|r| (r, units(home, r, taken))).collect();
+    let rules: Vec<&'static Rule> = rules::rules().collect();
+    let expanded: Vec<_> = rules.into_par_iter().map(|r| (r, units(home, r, taken))).collect();
     expanded
         .into_par_iter()
         .flat_map_iter(|(rule, (units, excluded))| {
@@ -291,8 +292,8 @@ fn group(home: &Path, rule: &'static Rule, mut measured: Vec<(Unit, Usage)>, exc
                     it.usage.add(usage);
                 }
                 if excluded > 0 {
-                    let prefixes = rule.exclude.iter().map(|p| format!("{p}*")).collect::<Vec<_>>().join(", ");
-                    it.notes.push(format!("{prefixes} {excluded}개는 건드리지 않음 (macOS 가 관리)"));
+                    let prefixes = rule.exclude.prefixes.iter().map(|p| format!("{p}*")).collect::<Vec<_>>().join(", ");
+                    it.notes.push(format!("{prefixes} {excluded}개는 건드리지 않음 ({})", rule.exclude.why));
                 }
                 items.push(it);
             }

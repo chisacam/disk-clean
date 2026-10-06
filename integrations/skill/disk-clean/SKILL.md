@@ -1,6 +1,6 @@
 ---
 name: disk-clean
-description: Find out what fills a Mac's disk (the "시스템 데이터" or "문서" bars in Storage settings) and free space safely with the disk-clean CLI — measure, explain, plan, and delete only what the user approved. Use for "디스크 정리", "용량 확보", "저장 공간이 부족해", "시스템 데이터가 왜 이렇게 커", "캐시 지워줘", "node_modules 정리", "지운 앱 찌꺼기", "free up disk space", "what is taking space on my Mac". Not for Linux or Windows, and not for deleting documents, photos or other files the user made.
+description: Find out what fills the disk on macOS or Linux (on a Mac, the "시스템 데이터" or "문서" bars in Storage settings) and free space safely with the disk-clean CLI — measure, explain, plan, and delete only what the user approved. Use for "디스크 정리", "용량 확보", "저장 공간이 부족해", "시스템 데이터가 왜 이렇게 커", "캐시 지워줘", "node_modules 정리", "지운 앱 찌꺼기", "free up disk space", "what is taking space on my Mac". Not for Windows, and not for deleting documents, photos or other files the user made.
 ---
 
 # disk-clean
@@ -20,7 +20,7 @@ description: Find out what fills a Mac's disk (the "시스템 데이터" or "문
 ## 순서
 
 1. **재기** — `disk-clean scan --json`. 읽기만 하고 10초 안팎 걸린다. 이름 없는 큰 폴더는 `disk-clean top <경로> -d 2 --json` 으로 내려가 본다.
-2. **설명** — 분류별로 쉬운 말로, 무엇이고 지우면 무슨 일이 생기는지. 크기는 `bytes` 를 GiB 로 바꿔 말하되 단위를 밝힌다(macOS 설정 앱은 GB 라 7% 크게 보인다).
+2. **설명** — 분류별로 쉬운 말로, 무엇이고 지우면 무슨 일이 생기는지. 크기는 `bytes` 를 GiB 로 바꿔 말하되 단위를 밝힌다(macOS 설정 앱은 GB 라 7% 크게 보인다). 운영체제가 관리하는 `system` 항목은 설명만 한다 — Linux 의 systemd 저널은 `sudo journalctl --vacuum-time=…` 을 사용자가 직접 실행하도록 안내하고, 대신 실행하지 않는다.
 3. **고르기** — 사용자가 고른다. 먼저 권할 것은 `safe` 다. `regenerable` 과 `leftover` 는 아래 표의 비용을 말하고 묻는다.
 4. **계획** — `disk-clean plan <ID…> --json`. 출력의 `id`, `items[].id`·`bytes`, `total_bytes`, `items[].notes`, `refused` 를 그대로 보여 준다. 계획은 1시간 동안, 한 번만 쓸 수 있다.
 5. **승인** — 사용자가 그 계획으로 지워도 된다고 할 때까지 기다린다.
@@ -33,10 +33,10 @@ description: Find out what fills a Mac's disk (the "시스템 데이터" or "문
 |---|---|---|
 | `safe` | 앱이 다시 만드는 캐시·로그 | 실행 중인 앱은 끄고 지우는 편이 깔끔하다 |
 | `regenerable` | 다시 받거나 빌드해야 하는 것 | 비용: `node_modules` → 다시 install, `target` → 다시 build, `.terraform` → `terraform init`(원격 backend 에 닿아야 한다 — VPN 이 필요한 환경이면 연결된 상태에서), 고른 workspace 는 default 로 돌아간다 |
-| `leftover` | 이미 지운 앱이 남긴 컨테이너 | 앱을 다시 설치하면 리소스·설정·로컬 세이브를 처음부터 받는다 |
+| `leftover` | 이미 지운 앱이 남긴 컨테이너 (macOS 만) | 앱을 다시 설치하면 리소스·설정·로컬 세이브를 처음부터 받는다 |
 | `review` | 사용자 데이터일 수 있는 것 | 도구가 지우지 않는다 |
 
-- `unreadable` 이 0 보다 크면 그 크기는 하한값이다. `full_disk_access` 가 `false` 면 휴지통·메일·메시지·Safari 는 재지 못했다. 터미널 앱에 '전체 디스크 접근 권한'을 주면 잴 수 있다고 안내한다.
+- `unreadable` 이 0 보다 크면 그 크기는 하한값이다. macOS 에서 `full_disk_access` 가 `false` 면 휴지통·메일·메시지·Safari 는 재지 못했다. 터미널 앱에 '전체 디스크 접근 권한'을 주면 잴 수 있다고 안내한다(Linux 에는 이 권한이 없고 값은 `null`).
 - 상위 ID 는 하위를 모두 포함한다. `caches` 는 `caches/Homebrew` 같은 하위 항목까지, `dev:.terraform` 은 `dev:.terraform:<프로젝트>` 까지 지운다. 일부만 원하면 하위 ID 를 쓴다.
 - `notes` 의 ⚠ 표시는 그대로 전한다(모듈 clone 안에 중첩된 `.terraform`, 코드가 지워진 뒤 남은 `.terraform`, 선택된 workspace).
 

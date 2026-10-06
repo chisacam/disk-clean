@@ -1,7 +1,7 @@
 # disk-clean
 
-macOS 의 '시스템 데이터'·'문서'로 뭉뚱그려지는 용량이 실제로 어디에 있는지 재서 보여 주고,
-**다시 만들 수 있는 것만** 골라 지우는 CLI.
+디스크를 무엇이 차지하는지 — macOS 의 '시스템 데이터'·'문서'처럼 뭉뚱그려지는 용량까지 — 재서 보여 주고,
+**다시 만들 수 있는 것만** 골라 지우는 CLI. macOS 와 Linux 용.
 
 ```sh
 cargo install --path .     # ~/.cargo/bin/disk-clean
@@ -19,15 +19,37 @@ disk-clean log                        # 지운 기록
 `scan`·`top`·`plan`·`apply`·`log` 는 `--json` 을 받는다. 크기는 바이트 정수, 오류도 JSON 이다.
 종료 코드: 0 성공 · 1 오류 · 2 일부만 지움 · 3 거부(안전장치가 막음).
 
+## 지원 플랫폼
+
+| 플랫폼 | 상태 | 확인한 방법 |
+|---|---|---|
+| macOS (Apple Silicon) | 지원 | macOS 26 에서 개발·실사용, `tests/e2e.py`, CI `macos-latest` |
+| Linux (x86_64) | 지원 | CI `ubuntu-latest` 에서 테스트·`tests/e2e.py`·실제 홈 scan |
+| macOS (Intel), Linux (arm64) | 빌드 대상이지만 시험하지 않음 | — |
+| Windows | 지원하지 않음 | 빌드가 오류 한 줄로 멈춘다 |
+
+측정·개발 산출물·plan/apply·감사 로그는 두 플랫폼에서 같다. 플랫폼마다 다른 것은 어디를 보는가다.
+
+| | 공통 | macOS | Linux |
+|---|---|---|---|
+| 안전 | npm·uv·bun 캐시 | `~/Library/Caches`(`com.apple.*` 제외), 로그, Xcode DerivedData, 메일 첨부 사본, 휴지통 | `~/.cache`(AI 모델·uv 제외), 휴지통(`~/.local/share/Trash`) |
+| 재생성 가능 | Cargo·Gradle·Maven·Go·Terraform 캐시, 프로젝트의 `node_modules`·`target`·`.terraform`·`.venv` … | 샌드박스 앱 캐시, Xcode 기기 지원 파일, 시뮬레이터 캐시, pnpm | Flatpak 앱 캐시(`~/.var/app/*/cache`), pnpm |
+| 지운 앱이 남긴 데이터 | — | 앱이 없어진 컨테이너와 그 앱의 `/var/folders` 캐시 | — |
+| 직접 판단 (지우지 않음) | 로컬 AI 모델, `~/Downloads` | 앱 컨테이너·그룹 컨테이너, Application Support, Xcode Archives, 시뮬레이터, 메시지 첨부 | `~/.local/share`, `~/.var/app` |
+| 시스템 (정보만) | 디스크 전체·남은 공간 | 로컬 스냅샷, `/private/var/vm`, `/var/folders` | systemd 저널, `/tmp`, `/var/tmp`, 스왑 파일 |
+
+Linux 의 한계: 다운로드 폴더는 `~/Downloads` 만 본다(XDG 사용자 폴더 이름이 '다운로드'처럼 현지화돼 있으면 보지 않는다).
+root 권한이 필요한 곳(systemd 저널 정리, `/var/lib/docker`, Snap)은 지우지 않고, 저널은 줄이는 명령만 안내한다.
+
 ## 분류
 
 | 분류 | 뜻 | `clean` |
 |---|---|---|
-| 안전 | 앱이 알아서 다시 만듦 — `~/Library/Caches`, 로그, npm·uv·bun 캐시, Xcode DerivedData | 지움 (목록에서 기본 선택) |
-| 재생성 가능 | 다시 받거나 빌드해야 함 — 샌드박스 앱 캐시, Cargo·Gradle·Maven·Go·pnpm 캐시, 프로젝트의 `node_modules`·`target`·`.terraform`·`.venv` … | 지움 (직접 골라야 함) |
-| 지운 앱이 남긴 데이터 | 앱을 지운 뒤 남은 컨테이너와 그 앱의 `/var/folders` 캐시 — 아래 세 조건이 모두 맞을 때만 | 지움 (직접 골라야 함, 지우기 직전 재확인) |
-| 직접 판단 | 사용자 데이터일 수 있음 — 앱 컨테이너(게임 리소스 등), Application Support, 로컬 AI 모델, 다운로드 | **거부** — 앱 안에서 정리 |
-| 시스템 | 로컬 스냅샷, 절전 이미지·스왑, `/var/folders` | 정보만 |
+| 안전 | 앱이 알아서 다시 만듦 | 지움 (목록에서 기본 선택) |
+| 재생성 가능 | 다시 받거나 빌드해야 함 | 지움 (직접 골라야 함) |
+| 지운 앱이 남긴 데이터 | 앱을 지운 뒤 남은 것 — 아래 세 조건이 모두 맞을 때만 (macOS) | 지움 (직접 골라야 함, 지우기 직전 재확인) |
+| 직접 판단 | 사용자 데이터일 수 있음 | **거부** — 앱 안에서 정리 |
+| 시스템 | 운영체제가 관리 | 정보만 |
 
 개발 산출물은 이름만으로 고르지 않는다. 옆에 프로젝트 파일이 있어야 한다
 (`node_modules` ↔ `package.json`, `target` ↔ `Cargo.toml`/`pom.xml`/`CACHEDIR.TAG`, `.venv` ↔ `pyvenv.cfg` …).
@@ -41,8 +63,8 @@ LaunchServices 에 그 bundle id 로 등록된 앱이 없고, Spotlight 에서�
 ## 안전장치
 
 - `scan`·`top`·`--dry-run` 은 아무것도 바꾸지 않는다.
-- 지우기 전에 항목·경로·크기를 보여 주고 `y` 를 받는다. 터미널이 아니면 `--yes` 없이는 지우지 않는다.
-- 홈 폴더 밖, 홈 바로 아래, 보호 목록(`~/Library/Caches` 자체, `~/Documents` …), 상위 경로에 심볼릭 링크가 낀 곳은 지우지 않는다.
+- 지우기 전에 항목·경로·크기를 보여 주고 `y` 를 받는다. 터미널이 아니면 `clean` 은 지우지 않는다 — `plan` 과 `apply` 를 쓴다.
+- 홈 폴더 밖, 홈 바로 아래, 보호 목록(`~/Library/Caches`·`~/.cache`·`~/.local/share` 자체, `~/Documents` …), 상위 경로에 심볼릭 링크가 낀 곳은 지우지 않는다.
 - 심볼릭 링크는 따라가지 않고, 다른 볼륨으로 넘어가지 않는다. `com.apple.*` 캐시는 건드리지 않는다.
 - 개발 산출물은 지우기 직전에 표식을 다시 확인한다.
 - 지운 뒤 늘어난 공간은 추정이 아니라 `statfs` 로 잰 값을 보여 준다.
@@ -70,7 +92,6 @@ ln -s "$PWD/integrations/skill/disk-clean" ~/.claude/skills/disk-clean
 ln -s "$PWD/integrations/skill/disk-clean" ~/.pi/agent/skills/disk-clean
 # pi: apply 를 가로채 계획 내용을 보여 주고 승인을 받는 확장. clean 은 막는다
 ln -s "$PWD/integrations/pi/disk-clean-gate" ~/.pi/agent/extensions/disk-clean-gate
-node --test integrations/pi/gate.test.ts
 ```
 
 Claude Code 는 `~/.claude/settings.json` 의 권한 규칙으로 막는다:
@@ -90,12 +111,22 @@ Claude Code 의 규칙은 명령 앞부분으로 맞추므로 `~/.cargo/bin/disk
 
 - 크기는 할당된 블록(`st_blocks`) 기준이라 sparse 파일이 부풀지 않는다. 하드 링크는 한 번만 센다.
   APFS 복제본(clone)은 구분하지 못해 실제보다 크게 잡힐 수 있다.
-- 단위는 GiB(1024³). 설정 앱은 GB(1000³)라 7% 정도 크게 표시된다.
-- macOS 는 다른 앱의 컨테이너를 읽는 시스템 호출을 가끔 중단시킨다(EINTR). 읽기·삭제는 이때 다시 시도하고,
+- 단위는 GiB(1024³). macOS 설정 앱은 GB(1000³)라 7% 정도 크게 표시된다.
+- macOS 는 다른 앱의 컨테이너를 읽는 시스템 호출을 가끔 중단시킨다(EINTR, 어디서든 생길 수 있어 공통으로 처리한다). 읽기·삭제는 이때 다시 시도하고,
   그래도 못 읽은 곳은 버리지 않고 "읽지 못한 곳" 으로 센다. `DISK_CLEAN_DEBUG=1` 로 경로와 오류를 볼 수 있다.
-- 휴지통·메일·메시지·Safari 는 **전체 디스크 접근 권한**이 있어야 잰다. 권한이 없으면 그렇다고 표시하고,
+- macOS: 휴지통·메일·메시지·Safari 는 **전체 디스크 접근 권한**이 있어야 잰다. 권한이 없으면 그렇다고 표시하고,
   읽지 못한 폴더 수를 보여 준다. 권한은 이 프로그램이 아니라 실행하는 터미널 앱에 준다
   (시스템 설정 › 개인정보 보호 및 보안 › 전체 디스크 접근 권한).
+
+## 개발
+
+```sh
+cargo clippy --all-targets -- -D warnings && cargo test
+cargo build --release && python3 tests/e2e.py target/release/disk-clean   # 가짜 홈에서 scan → plan → apply
+node --test integrations/pi/gate.test.ts                                   # pi 확장 (Node 23.6+)
+```
+
+CI(`.github/workflows/ci.yml`)는 이 세 가지를 `ubuntu-latest` 와 `macos-latest` 에서 돌리고, 러너의 실제 홈을 읽기만 하는 scan 도 한 번 돌린다.
 
 ## 라이선스
 

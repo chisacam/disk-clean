@@ -52,8 +52,7 @@ pub struct Rule {
     pub mode: Mode,
     /// Relative to the home directory; a `*` component matches every directory there.
     pub targets: &'static [&'static str],
-    /// Entries whose names start with one of these are left alone.
-    pub exclude: &'static [&'static str],
+    pub exclude: Exclude,
     pub about: &'static str,
     /// Checked by default in the interactive picker.
     pub preselect: bool,
@@ -65,13 +64,129 @@ impl Rule {
     }
 }
 
-/// Apple's own caches and daemons; macOS manages them.
-const APPLE: &[&str] = &["com.apple."];
+/// Entries left alone, and why.
+pub struct Exclude {
+    /// Entries whose names start with one of these.
+    pub prefixes: &'static [&'static str],
+    pub why: &'static str,
+}
+
+const NONE: Exclude = Exclude { prefixes: &[], why: "" };
+
+/// Apple's own caches and daemons.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const APPLE: Exclude = Exclude { prefixes: &["com.apple."], why: "macOS 가 관리" };
 
 use Mode::*;
 use Safety::*;
 
-pub const RULES: &[Rule] = &[
+/// Everywhere: tools that keep their data in the same place on every Unix.
+const COMMON: &[Rule] = &[
+    Rule {
+        id: "npm",
+        name: "npm 캐시",
+        safety: Safe,
+        mode: Whole,
+        targets: &[".npm/_cacache"],
+        exclude: NONE,
+        about: "다음 npm install 때 다시 받음",
+        preselect: true,
+    },
+    Rule {
+        id: "uv",
+        name: "uv 캐시",
+        safety: Safe,
+        mode: Whole,
+        targets: &[".cache/uv"],
+        exclude: NONE,
+        about: "다음 uv sync 때 다시 받음",
+        preselect: true,
+    },
+    Rule {
+        id: "bun",
+        name: "bun 캐시",
+        safety: Safe,
+        mode: Whole,
+        targets: &[".bun/install/cache"],
+        exclude: NONE,
+        about: "다음 bun install 때 다시 받음",
+        preselect: true,
+    },
+    Rule {
+        id: "cargo",
+        name: "Cargo 레지스트리",
+        safety: Regenerable,
+        mode: Whole,
+        targets: &[".cargo/registry/cache", ".cargo/registry/src", ".cargo/git/checkouts"],
+        exclude: NONE,
+        about: "다음 cargo build 때 다시 받음",
+        preselect: false,
+    },
+    Rule {
+        id: "gradle",
+        name: "Gradle 캐시",
+        safety: Regenerable,
+        mode: Whole,
+        targets: &[".gradle/caches"],
+        exclude: NONE,
+        about: "다음 gradle 빌드 때 다시 받음",
+        preselect: false,
+    },
+    Rule {
+        id: "maven",
+        name: "Maven 저장소",
+        safety: Regenerable,
+        mode: Whole,
+        targets: &[".m2/repository"],
+        exclude: NONE,
+        about: "다음 mvn 빌드 때 다시 받음",
+        preselect: false,
+    },
+    Rule {
+        id: "go-mod",
+        name: "Go 모듈 캐시",
+        safety: Regenerable,
+        mode: Whole,
+        targets: &["go/pkg/mod"],
+        exclude: NONE,
+        about: "go clean -modcache 와 같음. 다음 빌드 때 다시 받음",
+        preselect: false,
+    },
+    Rule {
+        id: "terraform-plugins",
+        name: "Terraform 플러그인 캐시",
+        safety: Regenerable,
+        mode: Whole,
+        targets: &[".terraform.d/plugin-cache"],
+        exclude: NONE,
+        about: "다음 terraform init 때 다시 받음",
+        preselect: false,
+    },
+    Rule {
+        id: "models",
+        name: "로컬 AI 모델",
+        safety: Review,
+        mode: ReportSelf,
+        targets: &[".ollama", ".lmstudio", ".cache/huggingface", ".mtplx"],
+        exclude: NONE,
+        about: "다시 받을 수는 있지만 수십 GB 다운로드",
+        preselect: false,
+    },
+    Rule {
+        id: "downloads",
+        name: "다운로드 폴더",
+        safety: Review,
+        mode: ReportChildren,
+        targets: &["Downloads"],
+        exclude: NONE,
+        about: "직접 받은 파일",
+        preselect: false,
+    },
+];
+
+/// macOS: `~/Library` and Apple's developer tools.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+const MACOS: &[Rule] = &[
     Rule {
         id: "caches",
         name: "앱 캐시",
@@ -88,38 +203,8 @@ pub const RULES: &[Rule] = &[
         safety: Safe,
         mode: Contents,
         targets: &["Library/Logs"],
-        exclude: &[],
+        exclude: NONE,
         about: "앱 로그와 크래시 리포트",
-        preselect: true,
-    },
-    Rule {
-        id: "npm",
-        name: "npm 캐시",
-        safety: Safe,
-        mode: Whole,
-        targets: &[".npm/_cacache"],
-        exclude: &[],
-        about: "다음 npm install 때 다시 받음",
-        preselect: true,
-    },
-    Rule {
-        id: "uv",
-        name: "uv 캐시",
-        safety: Safe,
-        mode: Whole,
-        targets: &[".cache/uv"],
-        exclude: &[],
-        about: "다음 uv sync 때 다시 받음",
-        preselect: true,
-    },
-    Rule {
-        id: "bun",
-        name: "bun 캐시",
-        safety: Safe,
-        mode: Whole,
-        targets: &[".bun/install/cache"],
-        exclude: &[],
-        about: "다음 bun install 때 다시 받음",
         preselect: true,
     },
     Rule {
@@ -128,7 +213,7 @@ pub const RULES: &[Rule] = &[
         safety: Safe,
         mode: Contents,
         targets: &["Library/Developer/Xcode/DerivedData"],
-        exclude: &[],
+        exclude: NONE,
         about: "Xcode 빌드 산출물. 다음 빌드 때 다시 만듦",
         preselect: true,
     },
@@ -138,7 +223,7 @@ pub const RULES: &[Rule] = &[
         safety: Safe,
         mode: Contents,
         targets: &["Library/Containers/com.apple.mail/Data/Library/Mail Downloads"],
-        exclude: &[],
+        exclude: NONE,
         about: "메일에서 첨부파일을 열 때 만든 사본. 원본은 메일에 남음",
         preselect: true,
     },
@@ -148,7 +233,7 @@ pub const RULES: &[Rule] = &[
         safety: Safe,
         mode: Contents,
         targets: &[".Trash"],
-        exclude: &[],
+        exclude: NONE,
         about: "이미 버린 파일. 지우면 되돌릴 수 없음",
         preselect: false,
     },
@@ -172,7 +257,7 @@ pub const RULES: &[Rule] = &[
             "Library/Developer/Xcode/watchOS DeviceSupport",
             "Library/Developer/Xcode/tvOS DeviceSupport",
         ],
-        exclude: &[],
+        exclude: NONE,
         about: "기기를 다시 연결하면 Xcode 가 다시 복사함",
         preselect: false,
     },
@@ -182,48 +267,8 @@ pub const RULES: &[Rule] = &[
         safety: Regenerable,
         mode: Whole,
         targets: &["Library/Developer/CoreSimulator/Caches"],
-        exclude: &[],
+        exclude: NONE,
         about: "시뮬레이터를 띄울 때 다시 만듦",
-        preselect: false,
-    },
-    Rule {
-        id: "cargo",
-        name: "Cargo 레지스트리",
-        safety: Regenerable,
-        mode: Whole,
-        targets: &[".cargo/registry/cache", ".cargo/registry/src", ".cargo/git/checkouts"],
-        exclude: &[],
-        about: "다음 cargo build 때 다시 받음",
-        preselect: false,
-    },
-    Rule {
-        id: "gradle",
-        name: "Gradle 캐시",
-        safety: Regenerable,
-        mode: Whole,
-        targets: &[".gradle/caches"],
-        exclude: &[],
-        about: "다음 gradle 빌드 때 다시 받음",
-        preselect: false,
-    },
-    Rule {
-        id: "maven",
-        name: "Maven 저장소",
-        safety: Regenerable,
-        mode: Whole,
-        targets: &[".m2/repository"],
-        exclude: &[],
-        about: "다음 mvn 빌드 때 다시 받음",
-        preselect: false,
-    },
-    Rule {
-        id: "go-mod",
-        name: "Go 모듈 캐시",
-        safety: Regenerable,
-        mode: Whole,
-        targets: &["go/pkg/mod"],
-        exclude: &[],
-        about: "go clean -modcache 와 같음. 다음 빌드 때 다시 받음",
         preselect: false,
     },
     Rule {
@@ -232,18 +277,8 @@ pub const RULES: &[Rule] = &[
         safety: Regenerable,
         mode: Whole,
         targets: &["Library/pnpm/store"],
-        exclude: &[],
+        exclude: NONE,
         about: "다음 pnpm install 때 다시 받음",
-        preselect: false,
-    },
-    Rule {
-        id: "terraform-plugins",
-        name: "Terraform 플러그인 캐시",
-        safety: Regenerable,
-        mode: Whole,
-        targets: &[".terraform.d/plugin-cache"],
-        exclude: &[],
-        about: "다음 terraform init 때 다시 받음",
         preselect: false,
     },
     Rule {
@@ -252,7 +287,7 @@ pub const RULES: &[Rule] = &[
         safety: Review,
         mode: ReportChildren,
         targets: &["Library/Containers"],
-        exclude: &[],
+        exclude: NONE,
         about: "샌드박스 앱이 저장한 데이터(위 캐시 포함). 앱 안에서 정리하거나 앱을 지울 때 함께 삭제",
         preselect: false,
     },
@@ -262,7 +297,7 @@ pub const RULES: &[Rule] = &[
         safety: Review,
         mode: ReportChildren,
         targets: &["Library/Group Containers"],
-        exclude: &[],
+        exclude: NONE,
         about: "여러 앱이 함께 쓰는 데이터",
         preselect: false,
     },
@@ -272,28 +307,8 @@ pub const RULES: &[Rule] = &[
         safety: Review,
         mode: ReportChildren,
         targets: &["Library/Application Support"],
-        exclude: &[],
+        exclude: NONE,
         about: "앱의 설정·데이터베이스·오프라인 데이터",
-        preselect: false,
-    },
-    Rule {
-        id: "models",
-        name: "로컬 AI 모델",
-        safety: Review,
-        mode: ReportSelf,
-        targets: &[".ollama", ".lmstudio", ".cache/huggingface", ".mtplx"],
-        exclude: &[],
-        about: "다시 받을 수는 있지만 수십 GB 다운로드",
-        preselect: false,
-    },
-    Rule {
-        id: "downloads",
-        name: "다운로드 폴더",
-        safety: Review,
-        mode: ReportChildren,
-        targets: &["Downloads"],
-        exclude: &[],
-        about: "직접 받은 파일",
         preselect: false,
     },
     Rule {
@@ -302,7 +317,7 @@ pub const RULES: &[Rule] = &[
         safety: Review,
         mode: ReportSelf,
         targets: &["Library/Developer/Xcode/Archives"],
-        exclude: &[],
+        exclude: NONE,
         about: "배포한 빌드와 dSYM. 크래시 분석에 필요할 수 있음",
         preselect: false,
     },
@@ -312,7 +327,7 @@ pub const RULES: &[Rule] = &[
         safety: Review,
         mode: ReportSelf,
         targets: &["Library/Developer/CoreSimulator/Devices"],
-        exclude: &[],
+        exclude: NONE,
         about: "`xcrun simctl delete unavailable` 로 안 쓰는 것만 지울 수 있음",
         preselect: false,
     },
@@ -322,11 +337,89 @@ pub const RULES: &[Rule] = &[
         safety: Review,
         mode: ReportSelf,
         targets: &["Library/Messages/Attachments"],
-        exclude: &[],
+        exclude: NONE,
         about: "iMessage 로 주고받은 사진·파일",
         preselect: false,
     },
 ];
+
+/// Linux: XDG folders and Flatpak.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+const LINUX: &[Rule] = &[
+    Rule {
+        id: "caches",
+        name: "앱 캐시",
+        safety: Safe,
+        mode: Contents,
+        targets: &[".cache"],
+        exclude: Exclude {
+            prefixes: &["huggingface", "uv"],
+            why: "AI 모델과 uv 캐시는 따로 분류",
+        },
+        about: "XDG 캐시. 앱이 다시 받아 오거나 다시 만드는 데이터. 실행 중인 앱은 끄고 지우는 편이 깔끔함",
+        preselect: true,
+    },
+    Rule {
+        id: "trash",
+        name: "휴지통",
+        safety: Safe,
+        mode: Contents,
+        targets: &[".local/share/Trash/files", ".local/share/Trash/info"],
+        exclude: NONE,
+        about: "이미 버린 파일. 지우면 되돌릴 수 없음",
+        preselect: false,
+    },
+    Rule {
+        id: "flatpak-caches",
+        name: "Flatpak 앱 캐시",
+        safety: Regenerable,
+        mode: Contents,
+        targets: &[".var/app/*/cache"],
+        exclude: NONE,
+        about: "Flatpak 앱마다 따로 둔 캐시. 앱이 다시 만듦",
+        preselect: false,
+    },
+    Rule {
+        id: "pnpm",
+        name: "pnpm 저장소",
+        safety: Regenerable,
+        mode: Whole,
+        targets: &[".local/share/pnpm/store"],
+        exclude: NONE,
+        about: "다음 pnpm install 때 다시 받음",
+        preselect: false,
+    },
+    Rule {
+        id: "app-data",
+        name: "앱 데이터",
+        safety: Review,
+        mode: ReportChildren,
+        targets: &[".local/share"],
+        exclude: Exclude { prefixes: &["Trash"], why: "휴지통은 따로 분류" },
+        about: "앱의 데이터베이스·오프라인 데이터·게임(~/.local/share)",
+        preselect: false,
+    },
+    Rule {
+        id: "flatpak-apps",
+        name: "Flatpak 앱 데이터",
+        safety: Review,
+        mode: ReportChildren,
+        targets: &[".var/app"],
+        exclude: NONE,
+        about: "Flatpak 앱이 저장한 데이터(위 캐시 포함). 앱 안에서 정리하거나 앱을 지울 때 함께 삭제",
+        preselect: false,
+    },
+];
+
+#[cfg(target_os = "macos")]
+const PLATFORM: &[Rule] = MACOS;
+#[cfg(not(target_os = "macos"))]
+const PLATFORM: &[Rule] = LINUX;
+
+/// The rules for the system this was built for.
+pub fn rules() -> impl Iterator<Item = &'static Rule> {
+    COMMON.iter().chain(PLATFORM)
+}
 
 /// What a well-known file or folder name usually is.
 pub fn hint(name: &str) -> Option<&'static str> {
@@ -342,6 +435,11 @@ pub fn hint(name: &str) -> Option<&'static str> {
         "com.docker.docker" => "Docker 디스크 이미지 — docker system prune 또는 Docker 설정 › Resources",
         "CoreSimulator" => "iOS 시뮬레이터",
         "sleepimage" => "절전 이미지",
+        "docker" => "Docker 데이터(rootless) — docker system prune",
+        "containers" => "Podman 이미지 — podman system prune",
+        "flatpak" => "Flatpak 런타임 — flatpak uninstall --unused",
+        "Steam" => "Steam 게임 — Steam 에서 정리",
+        ".cache" => "캐시",
         _ => return None,
     })
 }
@@ -350,25 +448,45 @@ pub fn hint(name: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    fn each_platform() -> [(&'static str, Vec<&'static Rule>); 2] {
+        [
+            ("macos", COMMON.iter().chain(MACOS).collect()),
+            ("linux", COMMON.iter().chain(LINUX).collect()),
+        ]
+    }
+
     #[test]
-    fn ids_are_unique() {
-        let mut ids: Vec<_> = RULES.iter().map(|r| r.id).collect();
-        ids.sort();
-        ids.dedup();
-        assert_eq!(ids.len(), RULES.len());
+    fn ids_are_unique_on_each_platform() {
+        for (os, rules) in each_platform() {
+            let mut ids: Vec<_> = rules.iter().map(|r| r.id).collect();
+            ids.sort();
+            ids.dedup();
+            assert_eq!(ids.len(), rules.len(), "{os}");
+        }
     }
 
     #[test]
     fn review_rules_are_never_cleanable() {
-        for r in RULES.iter().filter(|r| r.safety == Review) {
-            assert!(!r.cleanable(), "{}", r.id);
+        for (_, rules) in each_platform() {
+            for r in rules.iter().filter(|r| r.safety == Review) {
+                assert!(!r.cleanable(), "{}", r.id);
+            }
         }
     }
 
     #[test]
     fn targets_stay_below_home() {
-        for t in RULES.iter().flat_map(|r| r.targets) {
-            assert!(!t.starts_with('/') && !t.split('/').any(|c| c == ".." || c.is_empty()), "{t}");
+        for (_, rules) in each_platform() {
+            for t in rules.iter().flat_map(|r| r.targets) {
+                assert!(!t.starts_with('/') && !t.split('/').any(|c| c == ".." || c.is_empty()), "{t}");
+            }
         }
+    }
+
+    #[test]
+    fn model_weights_never_count_as_cache() {
+        let linux_caches = LINUX.iter().find(|r| r.id == "caches").unwrap();
+        assert!(linux_caches.exclude.prefixes.contains(&"huggingface"));
+        assert!(COMMON.iter().any(|r| r.id == "models" && r.safety == Review && r.targets.contains(&".cache/huggingface")));
     }
 }
