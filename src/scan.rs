@@ -3,6 +3,7 @@
 use crate::dev::{self, Found, Kind};
 use crate::fmt::{date, size, tilde};
 use crate::orphans::{self, Orphan};
+use crate::whitelist::Whitelist;
 use crate::rules::{self, Mode, Rule, Safety};
 use crate::walk::{Seen, Usage, list, lstat, measure};
 use crate::Refused;
@@ -43,6 +44,8 @@ pub struct Item {
     pub notes: Vec<String>,
     /// Checked again right before deletion.
     pub recheck: Recheck,
+    /// Paths left out because the whitelist protects them.
+    pub protected: usize,
 }
 
 pub enum Recheck {
@@ -55,14 +58,27 @@ pub enum Recheck {
 
 pub fn scan(home: &Path, opts: &Opts) -> Vec<Item> {
     let seen = Seen::default();
-    let leftovers = orphans::find(home, &seen);
+    let wl = Whitelist::load(home);
+    let mut leftovers = orphans::find(home, &seen);
+    // A protected container is not offered as a leftover; it stays under the review listing.
+    leftovers.retain(|o| wl.protects(&o.container).is_none());
+    let mut leftover_protected = Vec::new();
+    for o in &mut leftovers {
+        let before = o.extra.len();
+        o.extra.retain(|(p, _)| wl.protects(p).is_none());
+        leftover_protected.push(before - o.extra.len());
+    }
     // Shown once, as leftovers, not again under containers or their caches.
     let taken: Vec<PathBuf> = leftovers.iter().map(|o| o.container.clone()).collect();
     let (mut items, dev) = rayon::join(
-        || rule_items(home, &seen, &taken),
-        || if opts.no_dev { Vec::new() } else { dev_items(home, opts, &seen) },
+        || rule_items(home, &seen, &taken, &wl),
+        || if opts.no_dev { Vec::new() } else { dev_items(home, opts, &seen, &wl) },
     );
-    items.extend(leftovers.iter().map(|o| leftover_item(home, o)));
+    items.extend(leftovers.iter().zip(leftover_protected).map(|(o, n)| {
+        let mut it = leftover_item(home, o);
+        it.protected = n;
+        it
+    }));
     items.extend(dev);
     items
 }
@@ -94,6 +110,7 @@ fn leftover_item(home: &Path, o: &Orphan) -> Item {
         usage,
         notes,
         recheck: Recheck::Leftover(o.container.clone()),
+        protected: 0,
     }
 }
 
@@ -166,28 +183,37 @@ fn entries(dir: &Path) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-fn units(home: &Path, rule: &Rule, taken: &[PathBuf]) -> (Vec<Unit>, usize) {
+/// Units of a rule, how many entries its `exclude` left out, and how many paths the whitelist kept back.
+fn units(home: &Path, rule: &Rule, taken: &[PathBuf], wl: &Whitelist) -> (Vec<Unit>, usize, usize) {
     let mut out = Vec::new();
     let mut excluded = 0;
+    let mut protected = 0;
     let skip = |name: &str| rule.exclude.prefixes.iter().any(|p| name.starts_with(p));
     let is_taken = |p: &Path| taken.iter().any(|t| p.starts_with(t));
+    // Only what would be deleted is checked; review listings show everything.
+    let mut kept = |p: &Path| {
+        let hit = rule.cleanable() && wl.protects(p).is_some();
+        protected += hit as usize;
+        hit
+    };
     for pattern in rule.targets {
         for (target, star) in expand(home, pattern) {
             if is_taken(&target) {
                 continue;
             }
             match (rule.mode, star) {
-                (Mode::Whole | Mode::ReportSelf, _) => out.push(Unit {
-                    label: None,
-                    shown: target.clone(),
-                    paths: vec![target],
-                }),
+                (Mode::Whole | Mode::ReportSelf, _) => {
+                    if kept(&target) {
+                        continue;
+                    }
+                    out.push(Unit { label: None, shown: target.clone(), paths: vec![target] });
+                }
                 (Mode::Contents, Some(name)) => {
                     if skip(&name) {
                         excluded += 1;
                         continue;
                     }
-                    let paths = entries(&target).into_iter().map(|(p, _)| p).collect();
+                    let paths = entries(&target).into_iter().map(|(p, _)| p).filter(|p| !kept(p)).collect();
                     out.push(Unit { label: Some(name), shown: target, paths });
                 }
                 (Mode::Contents | Mode::ReportChildren, _) => {
@@ -199,21 +225,24 @@ fn units(home: &Path, rule: &Rule, taken: &[PathBuf]) -> (Vec<Unit>, usize) {
                             excluded += 1;
                             continue;
                         }
+                        if kept(&path) {
+                            continue;
+                        }
                         out.push(Unit { label: Some(name), shown: path.clone(), paths: vec![path] });
                     }
                 }
             }
         }
     }
-    (out, excluded)
+    (out, excluded, protected)
 }
 
-fn rule_items(home: &Path, seen: &Seen, taken: &[PathBuf]) -> Vec<Item> {
+fn rule_items(home: &Path, seen: &Seen, taken: &[PathBuf], wl: &Whitelist) -> Vec<Item> {
     let rules: Vec<&'static Rule> = rules::rules().collect();
-    let expanded: Vec<_> = rules.into_par_iter().map(|r| (r, units(home, r, taken))).collect();
+    let expanded: Vec<_> = rules.into_par_iter().map(|r| (r, units(home, r, taken, wl))).collect();
     expanded
         .into_par_iter()
-        .flat_map_iter(|(rule, (units, excluded))| {
+        .flat_map_iter(|(rule, (units, excluded, protected))| {
             let measured: Vec<(Unit, Usage)> = units
                 .into_par_iter()
                 .map(|u| {
@@ -221,9 +250,36 @@ fn rule_items(home: &Path, seen: &Seen, taken: &[PathBuf]) -> Vec<Item> {
                     (u, usage)
                 })
                 .collect();
-            group(home, rule, measured, excluded)
+            let mut items = group(home, rule, measured, excluded);
+            if protected > 0 {
+                // Carried by the rule's last item, or by an empty one when nothing else is left.
+                if items.is_empty() {
+                    items.push(empty_item(rule, home));
+                }
+                let last = items.last_mut().unwrap();
+                last.protected = protected;
+                last.notes.push(format!("whitelist 로 보호해 뺀 곳 {protected}개"));
+            }
+            items
         })
         .collect()
+}
+
+fn empty_item(rule: &'static Rule, home: &Path) -> Item {
+    Item {
+        id: rule.id.into(),
+        group: rule.name.to_string(),
+        about: rule.about,
+        safety: rule.safety,
+        cleanable: rule.cleanable(),
+        preselect: rule.preselect,
+        shown: tilde(&home.join(rule.targets[0]), home),
+        paths: Vec::new(),
+        usage: Usage::default(),
+        notes: Vec::new(),
+        recheck: Recheck::None,
+        protected: 0,
+    }
 }
 
 fn group(home: &Path, rule: &'static Rule, mut measured: Vec<(Unit, Usage)>, excluded: usize) -> Vec<Item> {
@@ -239,6 +295,7 @@ fn group(home: &Path, rule: &'static Rule, mut measured: Vec<(Unit, Usage)>, exc
         usage: Usage::default(),
         notes: Vec::new(),
         recheck: Recheck::None,
+        protected: 0,
     };
     measured.sort_by_key(|(_, u)| Reverse(u.bytes));
     let mut items = Vec::new();
@@ -302,9 +359,17 @@ fn group(home: &Path, rule: &'static Rule, mut measured: Vec<(Unit, Usage)>, exc
     items
 }
 
-fn dev_items(home: &Path, opts: &Opts, seen: &Seen) -> Vec<Item> {
+fn dev_items(home: &Path, opts: &Opts, seen: &Seen, wl: &Whitelist) -> Vec<Item> {
     let roots = if opts.dev_roots.is_empty() { dev::default_roots(home) } else { opts.dev_roots.clone() };
     let mut found = dev::find(&roots, seen);
+    let mut protected: Vec<&'static Kind> = Vec::new();
+    found.retain(|f| {
+        let hit = wl.protects(&f.path).is_some();
+        if hit {
+            protected.push(f.kind);
+        }
+        !hit
+    });
     if let Some(days) = opts.older_than {
         let cutoff = SystemTime::now() - Duration::from_secs(days * 86_400);
         found.retain(|f| f.modified.is_some_and(|m| m < cutoff));
@@ -315,9 +380,11 @@ fn dev_items(home: &Path, opts: &Opts, seen: &Seen) -> Vec<Item> {
     let mut ids = HashSet::new();
     for kind in dev::KINDS {
         let mine: Vec<&Found> = found.iter().filter(|f| std::ptr::eq(f.kind, kind)).collect();
-        if mine.is_empty() {
+        let kept = protected.iter().filter(|k| std::ptr::eq(**k, kind)).count();
+        if mine.is_empty() && kept == 0 {
             continue;
         }
+        let first_of_kind = items.len();
         let item = |id: String, shown: String| Item {
             id,
             group: kind.name.to_string(),
@@ -330,6 +397,7 @@ fn dev_items(home: &Path, opts: &Opts, seen: &Seen) -> Vec<Item> {
             usage: Usage::default(),
             notes: Vec::new(),
             recheck: Recheck::Artifact(kind),
+            protected: 0,
         };
         let (big, rest): (Vec<&Found>, Vec<&Found>) = mine.into_iter().partition(|f| f.usage.bytes >= ARTIFACT_MIN);
         for f in big {
@@ -368,6 +436,14 @@ fn dev_items(home: &Path, opts: &Opts, seen: &Seen) -> Vec<Item> {
                 it.usage.add(f.usage);
             }
             items.push(it);
+        }
+        if kept > 0 {
+            if items.len() == first_of_kind {
+                items.push(item(format!("dev:{}", kind.name), String::new()));
+            }
+            let last = items.last_mut().unwrap();
+            last.protected = kept;
+            last.notes.push(format!("whitelist 로 보호해 뺀 곳 {kept}개"));
         }
     }
     items

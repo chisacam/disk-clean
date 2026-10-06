@@ -14,6 +14,7 @@ mod state;
 mod system;
 mod top;
 mod walk;
+mod whitelist;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -84,6 +85,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// 절대 지우지 않을 경로를 관리합니다 (~/.config/disk-clean/whitelist)
+    Whitelist {
+        #[command(subcommand)]
+        action: Option<WhitelistAction>,
+        #[arg(long, global = true)]
+        json: bool,
+    },
     /// 터미널에서 골라 지웁니다 (확인 후). 터미널이 아니면 지우지 않습니다
     Clean {
         /// 지울 항목 ID. 생략하면 목록에서 고릅니다
@@ -103,10 +111,25 @@ impl Command {
             | Command::Top { json, .. }
             | Command::Plan { json, .. }
             | Command::Apply { json, .. }
-            | Command::Log { json, .. } => *json,
+            | Command::Log { json, .. }
+            | Command::Whitelist { json, .. } => *json,
             Command::Clean { .. } => false,
         }
     }
+}
+
+#[derive(Subcommand)]
+enum WhitelistAction {
+    /// 경로나 glob 을 추가합니다 (~ · $HOME · * ? [..] 사용 가능)
+    Add {
+        #[arg(required = true)]
+        patterns: Vec<String>,
+    },
+    /// 추가했던 것을 뺍니다. 기본 보호는 뺄 수 없습니다
+    Remove {
+        #[arg(required = true)]
+        patterns: Vec<String>,
+    },
 }
 
 #[derive(Args, Default)]
@@ -193,10 +216,11 @@ fn run(cli: Cli) -> Result<Outcome> {
             measuring(json);
             let items = scan::scan(&home, &scan.opts()?);
             let sys = system::System::read(&home);
+            let wl = whitelist::Whitelist::load(&home);
             if json {
-                println!("{}", report::scan_json(&items, &sys, start.elapsed()));
+                println!("{}", report::scan_json(&items, &sys, &wl, start.elapsed()));
             } else {
-                report::print_scan(&items, &sys, &home, all, start.elapsed());
+                report::print_scan(&items, &sys, &wl, &home, all, start.elapsed());
             }
         }
         Command::Top { path, count, depth, json } => {
@@ -237,6 +261,14 @@ fn run(cli: Cli) -> Result<Outcome> {
             } else {
                 print_log(&entries, bad);
             }
+        }
+        Command::Whitelist { action, json } => {
+            let changed = match action {
+                None => None,
+                Some(WhitelistAction::Add { patterns }) => Some(("추가", whitelist::add(&home, &std::env::current_dir()?, &patterns)?)),
+                Some(WhitelistAction::Remove { patterns }) => Some(("뺌", whitelist::remove(&home, &patterns)?)),
+            };
+            report::print_whitelist(&whitelist::Whitelist::load(&home), changed, json, &home);
         }
         Command::Clean { ids, dry_run, scan } => {
             measuring(false);

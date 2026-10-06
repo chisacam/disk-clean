@@ -14,6 +14,7 @@ disk-clean clean caches dev:.terraform --dry-run
 disk-clean plan caches/Homebrew npm   # 지울 계획만 만들어 저장 (1시간, 한 번)
 disk-clean apply 3fa2c19b04d1         # 그 계획에 적힌 경로만 다시 확인하고 지움
 disk-clean log                        # 지운 기록
+disk-clean whitelist add ~/Library/Logs/mole   # 절대 지우지 않을 경로
 ```
 
 `scan`·`top`·`plan`·`apply`·`log` 는 `--json` 을 받는다. 크기는 바이트 정수, 오류도 JSON 이다.
@@ -60,6 +61,28 @@ root 권한이 필요한 곳(systemd 저널 정리, `/var/lib/docker`, Snap)은 
 LaunchServices 에 그 bundle id 로 등록된 앱이 없고, Spotlight 에서도 찾을 수 없을 것.
 외장 디스크(`/Volumes/…`)에 있던 앱은 꽂혀 있지 않은 것과 구별이 안 되므로 판정하지 않는다.
 
+## whitelist
+
+[Mole](https://github.com/tw93/Mole) 의 whitelist 와 같은 방식이다. `~/.config/disk-clean/whitelist`
+(`$XDG_CONFIG_HOME` 이 있으면 그 아래)에 한 줄에 하나씩 적는다. `#` 은 주석, `~`·`$HOME` 을 쓸 수 있고 `* ? [...]` glob 이 된다.
+
+```sh
+disk-clean whitelist                        # 목록
+disk-clean whitelist add ~/Library/Logs/mole '~/Library/Caches/JetBrains*'
+disk-clean whitelist remove ~/Library/Logs/mole
+```
+
+- 지울 경로가 패턴과 같거나 glob 에 맞으면, 보호 폴더의 안쪽이면, 보호 경로를 품은 상위 폴더면 지우지 않는다.
+  항목은 폴더째 지워지므로 안쪽에 하나라도 보호할 것이 있으면 그 폴더 전체를 남긴다.
+- scan 은 보호된 경로를 후보에서 빼고 몇 개를 뺐는지 보여 준다. 삭제 직전 검사도 whitelist 를 다시 읽으므로,
+  계획을 만든 뒤 추가한 경로도 apply 가 거부한다.
+- 잘못 적은 줄(상대 경로, `..`, `//`, `/` 전체)은 쓰지 않고 경고한다.
+- **기본 보호**는 파일과 관계없이 항상 켜져 있고 뺄 수 없다. 지우면 다시 만드는 비용이 아니라 고장이 나는 것들로,
+  Mole 의 필수 보호 목록에서 가져왔다: macOS 는 `~/Library/Caches/CloudKit*`(iCloud 동기화), Poetry 가상 환경, renv 캐시,
+  Linux 는 `~/.cache/pypoetry/virtualenvs*`, `~/.cache/R/renv*`.
+- 에이전트: `whitelist`·`whitelist add` 는 지울 수 있는 범위를 줄이기만 하므로 자유롭게, `whitelist remove` 는 범위를 넓히므로
+  `apply` 처럼 승인을 받는다(Claude Code `ask` 규칙, pi 확장).
+
 ## 안전장치
 
 - `scan`·`top`·`--dry-run` 은 아무것도 바꾸지 않는다.
@@ -90,7 +113,7 @@ LaunchServices 에 그 bundle id 로 등록된 앱이 없고, Spotlight 에서�
 # 사용법 skill — Claude Code 와 pi
 ln -s "$PWD/integrations/skill/disk-clean" ~/.claude/skills/disk-clean
 ln -s "$PWD/integrations/skill/disk-clean" ~/.pi/agent/skills/disk-clean
-# pi: apply 를 가로채 계획 내용을 보여 주고 승인을 받는 확장. clean 은 막는다
+# pi: apply·whitelist remove 를 가로채 내용을 보여 주고 승인을 받는 확장. clean 은 막는다
 ln -s "$PWD/integrations/pi/disk-clean-gate" ~/.pi/agent/extensions/disk-clean-gate
 ```
 
@@ -98,11 +121,15 @@ Claude Code 는 `~/.claude/settings.json` 의 권한 규칙으로 막는다:
 
 ```json
 "permissions": {
-  "allow": ["Bash(disk-clean scan:*)", "Bash(disk-clean top:*)", "Bash(disk-clean plan:*)", "Bash(disk-clean log:*)"],
-  "ask":   ["Bash(disk-clean apply:*)"],
+  "allow": ["Bash(disk-clean scan:*)", "Bash(disk-clean top:*)", "Bash(disk-clean plan:*)", "Bash(disk-clean log:*)",
+            "Bash(disk-clean whitelist:*)"],
+  "ask":   ["Bash(disk-clean apply:*)", "Bash(disk-clean whitelist remove:*)", "Edit(~/.config/disk-clean/**)"],
   "deny":  ["Bash(disk-clean clean:*)"]
 }
 ```
+
+`Edit(~/.config/disk-clean/**)` 은 에이전트가 whitelist 파일을 편집 도구로 직접 고쳐 `remove` 승인을 건너뛰는 길을 막는다.
+셸(`echo >>`)로 고치는 길은 규칙으로 막을 수 없어 skill 의 지시로만 막는다.
 
 Claude Code 의 규칙은 명령 앞부분으로 맞추므로 `~/.cargo/bin/disk-clean apply …` 처럼 전체 경로로 부르면
 `ask` 에 걸리지 않는다(skill 이 이름으로만 부르게 한다). pi 확장은 전체 경로 형태도 잡는다.

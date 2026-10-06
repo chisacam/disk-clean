@@ -1,9 +1,10 @@
 //! What may be deleted, and deleting it.
 
 use crate::orphans;
+use crate::whitelist::Whitelist;
 use crate::scan::{Item, Recheck};
 use crate::walk::{list, lstat, retry};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use rayon::prelude::*;
 use std::fs;
 use std::io;
@@ -50,11 +51,18 @@ pub struct Roots {
     home: PathBuf,
     /// This user's `/var/folders/xx/<id>`, resolved.
     temp: Option<PathBuf>,
+    /// Read when the check is made, so an entry added after planning still counts.
+    whitelist: Whitelist,
 }
 
 impl Roots {
     pub fn new(home: &Path) -> Self {
-        Roots { home: home.to_path_buf(), temp: orphans::temp_root() }
+        Roots { home: home.to_path_buf(), temp: orphans::temp_root(), whitelist: Whitelist::load(home) }
+    }
+
+    /// Why `path` may not be deleted because of the whitelist, if it may not.
+    pub fn whitelisted(&self, path: &Path) -> Option<String> {
+        self.whitelist.protects(path).map(|p| format!("whitelist 에 있어 건너뜀 ({})", p.raw))
     }
 }
 
@@ -92,6 +100,9 @@ fn check(path: &Path, roots: &Roots) -> Result<()> {
     if in_temp.is_none() {
         ensure!(rel.components().count() >= 2, "너무 상위 경로라 건너뜀");
         ensure!(!PROTECTED.iter().any(|p| rel == Path::new(p)), "보호된 경로라 건너뜀");
+    }
+    if let Some(why) = roots.whitelisted(path) {
+        bail!(why);
     }
     let parent = path.parent().context("상위 폴더가 없음")?;
     ensure!(fs::canonicalize(parent)? == parent, "상위 경로에 심볼릭 링크가 있어 건너뜀");
@@ -150,7 +161,10 @@ mod tests {
         fs::create_dir_all(home.join("real/x")).unwrap();
         fs::create_dir_all(temp.join("C/com.x.game")).unwrap();
         std::os::unix::fs::symlink(home.join("real"), home.join("link")).unwrap();
-        let roots = Roots { home: home.clone(), temp: Some(temp.clone()) };
+        fs::create_dir_all(home.join(".config/disk-clean")).unwrap();
+        fs::write(home.join(".config/disk-clean/whitelist"), "~/Library/Caches/kept\n").unwrap();
+        fs::create_dir_all(home.join("Library/Caches/kept")).unwrap();
+        let roots = Roots { home: home.clone(), temp: Some(temp.clone()), whitelist: Whitelist::load(&home) };
 
         assert!(check(&home.join("Library/Caches/app"), &roots).is_ok());
         assert!(check(&home.join("Library/Caches"), &roots).is_err(), "protected");
@@ -162,6 +176,7 @@ mod tests {
         assert!(check(&temp.join("C"), &roots).is_err(), "the whole cache folder");
         assert!(check(&temp.join("X/com.x.game"), &roots).is_err(), "not C, T or 0");
         assert!(check(&temp.join("C/com.x.game/sub"), &roots).is_err(), "deeper than the app folder");
+        assert!(check(&home.join("Library/Caches/kept"), &roots).is_err(), "whitelisted");
     }
 
     #[test]

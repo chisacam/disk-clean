@@ -97,6 +97,21 @@ test("blocks when it cannot show what would be deleted", async () => {
 	assert.equal((await handler(bash("disk-clean apply a1b2c3"), ctx(true, false)))?.block, true, "no UI");
 });
 
+test("asks before lifting a whitelist entry, not before adding one", async () => {
+	const { handler } = load();
+	const add = ctx(false);
+	assert.equal(await handler(bash("disk-clean whitelist add ~/Library/Logs/mole"), add), undefined);
+	assert.equal(add.asked.length, 0);
+	assert.equal(await handler(bash("disk-clean whitelist --json"), ctx(false)), undefined);
+
+	const no = ctx(false);
+	assert.equal((await handler(bash("disk-clean whitelist remove ~/Library/Logs/mole"), no))?.block, true);
+	assert.match(no.asked[0], /~\/Library\/Logs\/mole/);
+	const yes = ctx(true);
+	assert.equal(await handler(bash("disk-clean whitelist remove ~/Library/Logs/mole --json"), yes), undefined);
+	assert.equal((await handler(bash("disk-clean whitelist remove ~/x"), ctx(true, false)))?.block, true, "no UI");
+});
+
 test("one question covers every apply in a command", async () => {
 	const { handler } = load();
 	plan("aaaa11", 1);

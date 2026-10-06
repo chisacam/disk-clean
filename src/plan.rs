@@ -272,9 +272,11 @@ fn verify(
     owner_ok: &HashMap<&str, Result<(), String>>,
     roots: &Roots,
 ) -> Result<u64> {
-    let owner = by_path
-        .get(p.path.as_path())
-        .ok_or_else(|| anyhow!("지금 다시 재 보니 지울 수 있는 항목이 아님"))?;
+    // A fresh scan already leaves whitelisted paths out; name that reason rather than the generic one.
+    let owner = match by_path.get(p.path.as_path()) {
+        Some(owner) => owner,
+        None => return Err(anyhow!(roots.whitelisted(&p.path).unwrap_or_else(|| "지금 다시 재 보니 지울 수 있는 항목이 아님".into()))),
+    };
     ensure!(owner.safety == item.safety, "분류가 '{}' 에서 '{}' 로 바뀜", item.safety.tag(), owner.safety.tag());
     if let Some(Err(e)) = owner_ok.get(owner.id.as_str()) {
         return Err(anyhow!("{e}"));

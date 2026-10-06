@@ -2,6 +2,7 @@ use crate::fmt::{pad, rpad, shorten, size, tilde};
 use crate::rules::Safety;
 use crate::scan::Item;
 use crate::system::System;
+use crate::whitelist::Whitelist;
 use console::{Color, style};
 use std::cmp::Reverse;
 use std::path::Path;
@@ -23,7 +24,7 @@ fn color(s: Safety) -> Color {
     }
 }
 
-pub fn print_scan(items: &[Item], sys: &System, home: &Path, all: bool, elapsed: Duration) {
+pub fn print_scan(items: &[Item], sys: &System, wl: &Whitelist, home: &Path, all: bool, elapsed: Duration) {
     if let Some(d) = &sys.disk {
         println!(
             "{}  {} 중 {} 사용 · {} 남음  {}",
@@ -39,6 +40,9 @@ pub fn print_scan(items: &[Item], sys: &System, home: &Path, all: bool, elapsed:
         println!("  {}", style(FDA_HELP).dim());
     }
 
+    for w in &wl.warnings {
+        println!("{}", style(format!("whitelist 경고: {w}")).yellow());
+    }
     let width = console::Term::stdout().size_checked().map(|(_, cols)| cols as usize);
     let mut hidden = 0;
     for safety in [Safety::Safe, Safety::Regenerable, Safety::Leftover, Safety::Review] {
@@ -112,6 +116,10 @@ pub fn print_scan(items: &[Item], sys: &System, home: &Path, all: bool, elapsed:
     if unreadable > 0 {
         println!("{}", style(format!("읽지 못한 곳 {unreadable}곳 — 그만큼 실제보다 적게 잡혔을 수 있습니다.")).yellow());
     }
+    let protected: usize = items.iter().map(|i| i.protected).sum();
+    if protected > 0 {
+        println!("{}", style(format!("whitelist 로 보호해 뺀 곳 {protected}곳 (disk-clean whitelist 로 확인)")).dim());
+    }
     if hidden > 0 {
         println!("{}", style(format!("10 MiB 미만 항목 {hidden}개는 숨김 (--all)")).dim());
     }
@@ -129,7 +137,7 @@ pub fn short_note(unreadable: u64) -> String {
     format!("⚠ 읽지 못한 곳 {unreadable}곳 — 실제 크기는 이보다 큼")
 }
 
-pub fn scan_json(items: &[Item], sys: &System, elapsed: Duration) -> serde_json::Value {
+pub fn scan_json(items: &[Item], sys: &System, wl: &Whitelist, elapsed: Duration) -> serde_json::Value {
     let mut sorted: Vec<&Item> = items.iter().collect();
     sorted.sort_by_key(|i| (i.safety, Reverse(i.usage.bytes)));
     serde_json::json!({
@@ -153,7 +161,13 @@ pub fn scan_json(items: &[Item], sys: &System, elapsed: Duration) -> serde_json:
             "shown": i.shown,
             "notes": i.notes,
             "paths": i.paths,
+            "protected": i.protected,
         })).collect::<Vec<_>>(),
+        "whitelist": {
+            "file": wl.file,
+            "patterns": wl.patterns,
+            "warnings": wl.warnings,
+        },
         "system": sys.entries.iter().map(|e| serde_json::json!({
             "label": e.label,
             "path": e.path,
@@ -165,6 +179,44 @@ pub fn scan_json(items: &[Item], sys: &System, elapsed: Duration) -> serde_json:
         "unreadable": items.iter().map(|i| i.usage.unreadable).sum::<u64>(),
         "elapsed_ms": elapsed.as_millis() as u64,
     })
+}
+
+pub fn print_whitelist(wl: &Whitelist, changed: Option<(&str, Vec<String>)>, json: bool, home: &Path) {
+    if json {
+        let mut out = serde_json::json!({
+            "schema": "disk-clean/whitelist/v1",
+            "file": wl.file,
+            "patterns": wl.patterns,
+            "warnings": wl.warnings,
+        });
+        if let Some((what, lines)) = &changed {
+            out[if *what == "추가" { "added" } else { "removed" }] = serde_json::json!(lines);
+        }
+        println!("{out}");
+        return;
+    }
+    if let Some((what, lines)) = &changed {
+        if lines.is_empty() {
+            println!("바뀐 것 없음 (이미 있음)");
+        }
+        for l in lines {
+            println!("{} {l}", style(format!("{what}:")).green());
+        }
+        println!();
+    }
+    println!("{}  {}", style("whitelist").bold(), style(tilde(&wl.file, home)).dim());
+    for p in &wl.patterns {
+        match p.builtin {
+            Some(why) => println!("  {}  {}", pad(&p.raw, 44), style(format!("기본 보호 — {why}")).dim()),
+            None => println!("  {}", p.raw),
+        }
+    }
+    if wl.patterns.iter().all(|p| p.builtin.is_some()) {
+        println!("  {}", style("(직접 추가한 것 없음 — disk-clean whitelist add <경로>)").dim());
+    }
+    for w in &wl.warnings {
+        println!("{}", style(format!("경고: {w}")).yellow());
+    }
 }
 
 /// Items grouped by heading, biggest group first.

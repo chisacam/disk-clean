@@ -128,6 +128,38 @@ try:
     plan_file.write_text(plan_file.read_text().replace("_cacache", "_cacachf"))
     check(run("apply", tampered["id"], "--json").returncode == 3, "an edited plan is refused")
     check((HOME / ".npm/_cacache/c").exists(), "and nothing was deleted")
+
+    # The whitelist: built-in protection, the user's own entries, and an entry added after planning.
+    cache = "Library/Caches" if MAC else ".cache"
+    builtin = "Library/Caches/CloudKit/db" if MAC else ".cache/pypoetry/virtualenvs/proj-py3.12/bin/python"
+    write(builtin, 1)
+    write(f"{cache}/Small/x", 1)
+    write(f"{cache}/Keep/x", 1)
+    added = run("whitelist", "add", f"~/{cache}/Keep", "--json")
+    check(added.returncode == 0 and as_json(added)["added"] == [f"~/{cache}/Keep"], "whitelist add")
+    caches = {i["id"]: i for i in as_json(run("scan", "--json"))["items"]}.get("caches", {})
+    offered = " ".join(caches.get("paths", []))
+    check("Small" in offered and "Keep" not in offered, "a whitelisted cache is not offered")
+    check("CloudKit" not in offered and "pypoetry" not in offered, "built-in protection is not offered")
+    check(caches.get("protected", 0) >= 2, f"the protected count is shown (got {caches.get('protected')})")
+
+    write(f"{cache}/Late/x", 1)
+    late = as_json(run("plan", "caches", "--json"))
+    check(any(p["path"].endswith("/Late") for i in late["items"] for p in i["paths"]), "Late is in the plan")
+    run("whitelist", "add", f"~/{cache}/Late")
+    applied = run("apply", late["id"], "--json")
+    result = as_json(applied)
+    check(applied.returncode == 2, f"apply is partial when a planned path was whitelisted since (got {applied.returncode})")
+    check(any(r["path"].endswith("/Late") and "whitelist" in r["reason"] for r in result["refused"]), "and says why")
+    for rel in [builtin, f"{cache}/Keep/x", f"{cache}/Late/x"]:
+        check((HOME / rel).exists(), f"kept {rel}")
+    check(not (HOME / cache / "Small").exists(), "the rest of the plan was deleted")
+
+    check(run("whitelist", "remove", "~/Library/Caches/CloudKit*" if MAC else "~/.cache/pypoetry/virtualenvs*").returncode == 3, "built-in protection cannot be removed")
+    check(run("whitelist", "remove", f"~/{cache}/Keep").returncode == 0, "whitelist remove")
+    wl_file = HOME / ".config/disk-clean/whitelist"
+    wl_file.write_text(wl_file.read_text() + "relative/path\n")
+    check(len(as_json(run("whitelist", "--json"))["warnings"]) == 1, "a bad line is reported, not ignored")
 finally:
     shutil.rmtree(HOME, ignore_errors=True)
 

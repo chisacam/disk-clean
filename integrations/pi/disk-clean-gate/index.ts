@@ -7,6 +7,9 @@
  * does not depend on how the model described the plan. `disk-clean clean` is
  * blocked outright; it is meant for people at a terminal.
  *
+ * `disk-clean whitelist remove` is asked about too: it lifts a protection, so it
+ * widens what later plans may delete. Adding to the whitelist only narrows it.
+ *
  * When in doubt it blocks: an id it cannot read literally (`"$ID"`), a plan it
  * cannot find, or no UI to ask in.
  */
@@ -20,6 +23,7 @@ import { isAbsolute, join } from "node:path";
 const WORD = String.raw`(?:^|[\s;&|()\x60'"])(?:[^\s;&|()\x60'"]*/)?disk-clean`;
 const APPLY = new RegExp(String.raw`${WORD}\s+apply\b([^;&|\n]*)`, "g");
 const CLEAN = new RegExp(String.raw`${WORD}\s+clean\b`);
+const UNPROTECT = new RegExp(String.raw`${WORD}\s+whitelist\s+remove\b([^;&|\n]*)`, "g");
 const PLAN_ID = /^[0-9a-f]{1,32}$/;
 const PATHS_PER_ITEM = 8;
 
@@ -124,6 +128,17 @@ export default function (pi: ExtensionAPI) {
 				block: true,
 				reason: "disk-clean clean 은 터미널의 사람용입니다. `disk-clean plan <ID…> --json` 으로 계획을 만들어 보여 주고, 승인을 받은 뒤 `disk-clean apply <계획 ID>` 를 실행하세요.",
 			};
+		}
+
+		const unprotect = [...command.matchAll(UNPROTECT)].map((m) => m[1].trim()).filter((s) => s !== "");
+		if (unprotect.length > 0) {
+			if (!ctx.hasUI) {
+				return { block: true, reason: "whitelist 에서 빼는 것은 사람의 승인이 필요한데, 물어볼 UI 가 없습니다." };
+			}
+			const message = `다음 보호가 풀립니다:\n\n${unprotect.map((s) => `  ${s}`).join("\n")}\n\n빼면 이 경로가 다시 정리 대상이 될 수 있습니다.`;
+			if (!(await ctx.ui.confirm("disk-clean: whitelist 에서 뺄까요?", message))) {
+				return { block: true, reason: "사용자가 whitelist 에서 빼는 것을 승인하지 않았습니다." };
+			}
 		}
 
 		const parsed = appliedIds(command);

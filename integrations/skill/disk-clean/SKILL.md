@@ -16,6 +16,7 @@ description: Find out what fills the disk on macOS or Linux (on a Mac, the "시�
 5. 계획 ID 는 셸 변수로 넘기지 말고 글자 그대로 적는다(`disk-clean apply 3fa2c19b04d1`). pi 의 확인 창은 그 ID 로 계획을 읽어 사람에게 보여 주는데, `"$ID"` 는 읽을 수 없어 막는다.
 6. `disk-clean` 이 PATH 에 없으면 전체 경로로 우회하지 말고 사용자에게 알린다(설치: 이 저장소에서 `cargo install --path .`). Claude Code 의 권한 규칙은 `disk-clean …` 으로 시작하는 명령에만 걸린다.
 7. `review` 항목은 도구가 지우지 않는다. 앱 안에서 정리하는 방법을 안내한다.
+8. whitelist 는 사용자가 요청할 때만 줄인다(`disk-clean whitelist remove`). 하네스가 확인 창을 띄운다. whitelist 파일(`~/.config/disk-clean/whitelist`)을 직접 고치지 않는다 — 그러면 그 확인을 건너뛴다.
 
 ## 순서
 
@@ -40,6 +41,21 @@ description: Find out what fills the disk on macOS or Linux (on a Mac, the "시�
 - 상위 ID 는 하위를 모두 포함한다. `caches` 는 `caches/Homebrew` 같은 하위 항목까지, `dev:.terraform` 은 `dev:.terraform:<프로젝트>` 까지 지운다. 일부만 원하면 하위 ID 를 쓴다.
 - `notes` 의 ⚠ 표시는 그대로 전한다(모듈 clone 안에 중첩된 `.terraform`, 코드가 지워진 뒤 남은 `.terraform`, 선택된 workspace).
 
+## whitelist
+
+사용자가 "이건 지우지 마" 라고 하면 계획에서 빼는 것으로 끝내지 말고 whitelist 에 넣는다. 다음 정리 때도 지켜진다.
+
+```sh
+disk-clean whitelist                          # 목록 (기본 보호 + 사용자 것)
+disk-clean whitelist add ~/Library/Logs/mole  # 추가 — 경로, ~ · $HOME, * ? [..] glob
+disk-clean whitelist remove ~/Library/Logs/mole   # 빼기 — 사용자가 요청했을 때만
+```
+
+- 폴더를 넣으면 그 안쪽도, 그 폴더를 품은 상위 폴더도 지우지 않는다(항목은 통째로 지워지므로).
+- scan JSON 의 `items[].protected` 는 whitelist 때문에 뺀 경로 수다. 크기에는 들어가지 않는다. `whitelist.warnings` 가 있으면 사용자에게 알린다(잘못 적어서 적용되지 않은 줄).
+- 기본 보호(CloudKit 캐시, Poetry 가상 환경, renv 캐시 — 지우면 다시 빌드로 끝나지 않고 깨지는 것)는 뺄 수 없다.
+- 계획을 만든 뒤 whitelist 에 넣은 경로도 apply 가 거부한다.
+
 ## 종료 코드와 거부
 
 0 성공 · 1 오류 · 2 일부만 지움 · 3 거부(안전장치가 막음). `--json` 이면 오류도 JSON(`kind: "refused" | "error"`)이다.
@@ -49,6 +65,7 @@ apply 가 거부하는 경우는 이렇다. 이유를 사용자에게 전하고,
 - 계획 파일이 만들어진 뒤 바뀜, 만료(1시간), 이미 실행한 계획
 - 다시 재 보니 더는 지울 대상이 아님(분류가 바뀌었거나 프로젝트 파일이 사라짐)
 - 같은 이름의 다른 파일·폴더로 바뀜
+- whitelist 에 있음(계획 뒤에 추가했어도)
 - 계획보다 크게 커짐(10% 와 64 MiB 중 큰 쪽을 넘음)
 
 ## 기록
