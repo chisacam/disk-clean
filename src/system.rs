@@ -127,8 +127,8 @@ mod platform {
             ("systemd 저널", "/var/log/journal", "sudo journalctl --vacuum-time=2weeks 로 줄일 수 있음"),
             ("/tmp", "/tmp", "재부팅이나 systemd-tmpfiles 가 정리"),
             ("/var/tmp", "/var/tmp", "systemd-tmpfiles 가 오래된 것을 정리"),
-            ("스왑 파일", "/swapfile", "스왑 — 정상"),
-            ("스왑 파일", "/swap.img", "스왑 — 정상"),
+            ("스왑 파일", "/swapfile", "정상 — 메모리가 모자랄 때 쓰는 공간"),
+            ("스왑 파일", "/swap.img", "정상 — 메모리가 모자랄 때 쓰는 공간"),
         ];
         candidates
             .into_iter()
