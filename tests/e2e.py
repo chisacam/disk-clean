@@ -38,7 +38,8 @@ def write(rel, mib=0, text=None):
 
 
 def run(*args):
-    env = {k: v for k, v in os.environ.items() if k not in ("XDG_STATE_HOME", "CLAUDECODE", "PI_SESSION_ID")}
+    drop = ("XDG_STATE_HOME", "XDG_CONFIG_HOME", "CLAUDECODE", "PI_SESSION_ID")
+    env = {k: v for k, v in os.environ.items() if k not in drop}
     env["HOME"] = str(HOME)
     return subprocess.run([BIN, *args], env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
 

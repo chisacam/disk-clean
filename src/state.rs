@@ -10,11 +10,13 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn dir(home: &Path) -> PathBuf {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(".local/state"));
-    base.join("disk-clean")
+    // Tests never read the environment, so they never touch a real state folder.
+    let xdg = if cfg!(test) { None } else { std::env::var_os("XDG_STATE_HOME") };
+    state_dir(home, xdg).join("disk-clean")
+}
+
+fn state_dir(home: &Path, xdg: Option<std::ffi::OsString>) -> PathBuf {
+    xdg.map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(".local/state"))
 }
 
 pub fn plans(home: &Path) -> PathBuf {
@@ -120,6 +122,14 @@ pub fn history(dir: &Path, n: usize) -> Result<(Vec<Entry>, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn honours_xdg_state_home_only_when_absolute() {
+        let home = Path::new("/home/u");
+        assert_eq!(state_dir(home, None), Path::new("/home/u/.local/state"));
+        assert_eq!(state_dir(home, Some("/st".into())), Path::new("/st"));
+        assert_eq!(state_dir(home, Some("relative".into())), Path::new("/home/u/.local/state"));
+    }
 
     #[test]
     fn fnv_is_stable() {

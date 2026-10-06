@@ -52,11 +52,14 @@ pub struct Whitelist {
 }
 
 pub fn file(home: &Path) -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| home.join(".config"));
-    base.join("disk-clean/whitelist")
+    // Tests never read the environment: a CI runner sets XDG_CONFIG_HOME, and
+    // the tests would then share the runner's real file instead of their own.
+    let xdg = if cfg!(test) { None } else { std::env::var_os("XDG_CONFIG_HOME") };
+    config_dir(home, xdg).join("disk-clean/whitelist")
+}
+
+fn config_dir(home: &Path, xdg: Option<std::ffi::OsString>) -> PathBuf {
+    xdg.map(PathBuf::from).filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(".config"))
 }
 
 /// Expands a pattern to an absolute path, or says why it cannot be used.
@@ -288,6 +291,14 @@ fn write(file: &Path, text: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn honours_xdg_config_home_only_when_absolute() {
+        let home = Path::new("/home/u");
+        assert_eq!(config_dir(home, None), Path::new("/home/u/.config"));
+        assert_eq!(config_dir(home, Some("/cfg".into())), Path::new("/cfg"));
+        assert_eq!(config_dir(home, Some("relative".into())), Path::new("/home/u/.config"));
+    }
 
     #[test]
     fn globs_match_like_the_shell() {
